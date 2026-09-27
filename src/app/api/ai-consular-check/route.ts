@@ -12,104 +12,17 @@ type ConsularCheckRequest = {
   documentText?: unknown;
 };
 
-type OpenAIOutputBlock = {
+type AnthropicContentBlock = {
   type?: string;
   text?: string;
 };
 
-type OpenAIOutputItem = {
-  content?: OpenAIOutputBlock[];
-};
-
-type OpenAIResponse = {
-  output_text?: string;
-  output?: OpenAIOutputItem[];
+type AnthropicResponse = {
+  content?: AnthropicContentBlock[];
   error?: {
     message?: string;
   };
 };
-
-const reportSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "score",
-    "statusLabel",
-    "completeness",
-    "clarity",
-    "ties",
-    "flags",
-    "roadmap",
-    "showPaySmallSmall",
-    "summary",
-    "disclaimer",
-  ],
-  properties: {
-    score: {
-      type: "integer",
-      minimum: 0,
-      maximum: 100,
-    },
-    statusLabel: {
-      type: "string",
-      enum: ["Critical gaps", "Good profile", "Excellent to apply"],
-    },
-    completeness: {
-      type: "integer",
-      minimum: 0,
-      maximum: 30,
-    },
-    clarity: {
-      type: "integer",
-      minimum: 0,
-      maximum: 30,
-    },
-    ties: {
-      type: "integer",
-      minimum: 0,
-      maximum: 40,
-    },
-    flags: {
-      type: "array",
-      minItems: 1,
-      maxItems: 6,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["type", "title", "body"],
-        properties: {
-          type: {
-            type: "string",
-            enum: ["risk", "weak", "excellent"],
-          },
-          title: {
-            type: "string",
-          },
-          body: {
-            type: "string",
-          },
-        },
-      },
-    },
-    roadmap: {
-      type: "array",
-      minItems: 3,
-      maxItems: 7,
-      items: {
-        type: "string",
-      },
-    },
-    showPaySmallSmall: {
-      type: "boolean",
-    },
-    summary: {
-      type: "string",
-    },
-    disclaimer: {
-      type: "string",
-    },
-  },
-} as const;
 
 function getClientKey(request: NextRequest) {
   return (
@@ -134,18 +47,31 @@ function isRateLimited(clientKey: string) {
   return false;
 }
 
-function getOutputText(response: OpenAIResponse) {
-  if (typeof response.output_text === "string") {
-    return response.output_text;
-  }
-
+function getOutputText(response: AnthropicResponse) {
   return (
-    response.output
-      ?.flatMap((item) => item.content ?? [])
+    response.content
+      ?.filter((block) => block.type === "text")
       .map((block) => block.text ?? "")
       .join("")
       .trim() ?? ""
   );
+}
+
+function extractJsonObject(text: string) {
+  const trimmed = text.trim();
+
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return trimmed;
+  }
+
+  return trimmed.slice(start, end + 1);
 }
 
 function clamp(value: unknown, min: number, max: number) {
@@ -200,13 +126,13 @@ function normalizeReport(value: unknown) {
 }
 
 export async function POST(request: NextRequest) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) {
     return NextResponse.json(
       {
         error:
-          "OPENAI_API_KEY is not configured. Add it to your environment to enable AI Consular Check.",
+          "ANTHROPIC_API_KEY is not configured. Add it to your environment to enable AI Consular Check.",
       },
       { status: 503 },
     );
@@ -251,44 +177,52 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const systemPrompt = [
+    "You are CartandGo's AI Consular Check assistant.",
+    "Review visa-readiness documents like a careful pre-submission reviewer, not as an embassy officer and not as a lawyer.",
+    "Do not guarantee approval or refusal.",
+    "Identify credibility, financial traceability, home-country ties, document consistency, and practical fixes.",
+    "Be direct, professional, and grounded only in the provided text.",
+    "Return only a valid JSON object with exactly these fields:",
+    "- score: integer 0-100",
+    "- statusLabel: one of Critical gaps, Good profile, Excellent to apply",
+    "- completeness: integer 0-30",
+    "- clarity: integer 0-30",
+    "- ties: integer 0-40",
+    "- flags: array of 1-6 objects with type risk|weak|excellent, title, body",
+    "- roadmap: array of 3-7 strings",
+    "- showPaySmallSmall: boolean",
+    "- summary: string",
+    "- disclaimer: string",
+  ].join("\n");
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL ?? "gpt-5-mini",
-      instructions:
-        "You are CartandGo's AI Consular Check assistant. Review visa-readiness documents like a careful pre-submission reviewer, not as an embassy officer and not as a lawyer. Do not guarantee approval or refusal. Identify credibility, financial traceability, home-country ties, document consistency, and practical fixes. Be direct, professional, and grounded only in the provided text. Return only JSON that matches the schema.",
-      input: [
+      model: process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-latest",
+      max_tokens: 1800,
+      temperature: 0.2,
+      system: systemPrompt,
+      messages: [
         {
           role: "user",
           content: [
-            {
-              type: "input_text",
-              text: [
-                `Target country: ${country}`,
-                `Visa class: ${visaClass}`,
-                "Document text:",
-                documentText,
-              ].join("\n"),
-            },
-          ],
+            `Target country: ${country}`,
+            `Visa class: ${visaClass}`,
+            "Document text:",
+            documentText,
+          ].join("\n"),
         },
       ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "consular_check_report",
-          strict: true,
-          schema: reportSchema,
-        },
-      },
     }),
   });
 
-  const data = (await response.json()) as OpenAIResponse;
+  const data = (await response.json()) as AnthropicResponse;
 
   if (!response.ok) {
     return NextResponse.json(
@@ -303,7 +237,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const outputText = getOutputText(data);
-    const report = normalizeReport(JSON.parse(outputText));
+    const report = normalizeReport(JSON.parse(extractJsonObject(outputText)));
 
     return NextResponse.json({ report });
   } catch {

@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
+import { worldCountries } from "@/data/countries";
 import { submitLead } from "@/lib/leadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
@@ -150,7 +151,7 @@ const serviceForms = [
         type: "select",
         options: ["Study Visa", "Work Visa", "Visit Visa", "Tourist Visa", "Family Visa"],
       },
-      { label: "Destination Country", placeholder: "e.g. Canada" },
+      { label: "Destination Country", type: "select", options: worldCountries },
       { label: "Intended Travel Date", type: "date" },
       {
         label: "Application Status",
@@ -169,7 +170,7 @@ const serviceForms = [
       { label: "Full Name", placeholder: "Your full name" },
       { label: "Email Address", type: "email", placeholder: "you@email.com" },
       { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
-      { label: "Destination Country", placeholder: "e.g. Canada" },
+      { label: "Destination Country", type: "select", options: worldCountries },
       { label: "Required Amount", placeholder: "e.g. CAD 20,635" },
       {
         label: "Funds Source",
@@ -191,7 +192,7 @@ const serviceForms = [
       { label: "Email Address", type: "email", placeholder: "you@email.com" },
       { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
       { label: "Current Education Level", placeholder: "e.g. SSCE, ND, BSc" },
-      { label: "Preferred Country", placeholder: "e.g. UK" },
+      { label: "Preferred Country", type: "select", options: worldCountries },
       { label: "Playing Position", placeholder: "e.g. Midfielder" },
       { label: "Profile Link", type: "url", placeholder: "Highlight reel or portfolio URL", required: false },
     ],
@@ -205,7 +206,7 @@ const serviceForms = [
       { label: "Full Name", placeholder: "Your full name" },
       { label: "Email Address", type: "email", placeholder: "you@email.com" },
       { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
-      { label: "Destination", placeholder: "e.g. France" },
+      { label: "Destination", type: "select", options: worldCountries },
       { label: "Departure Date", type: "date" },
       { label: "Return Date", type: "date" },
       {
@@ -286,7 +287,7 @@ const serviceForms = [
       { label: "Full Name", placeholder: "Your full name" },
       { label: "Email Address", type: "email", placeholder: "you@email.com" },
       { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
-      { label: "Application Country", placeholder: "e.g. Canada" },
+      { label: "Application Country", type: "select", options: worldCountries },
       {
         label: "Appointment Needed",
         type: "select",
@@ -357,7 +358,7 @@ const serviceForms = [
       {
         label: "Preferred Country",
         type: "select",
-        options: ["Canada", "Australia", "Both", "Not sure yet"],
+        options: [...worldCountries, "Not sure yet"],
       },
       { label: "Highest Education", placeholder: "e.g. BSc, MSc, HND" },
       { label: "Occupation", placeholder: "Your current job title" },

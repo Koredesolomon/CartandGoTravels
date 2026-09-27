@@ -2,6 +2,7 @@ import { AboutPage } from "@/components/pages/AboutPage";
 import { AiConsularCheckPage } from "@/components/pages/AiConsularCheckPage";
 import { ContactPage } from "@/components/pages/ContactPage";
 import { CoursesPage } from "@/components/pages/CoursesPage";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { RouteLandingPage } from "@/components/pages/RouteLandingPage";
 import { ServicesDirectoryPage } from "@/components/pages/ServicesDirectoryPage";
@@ -68,7 +69,10 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
   }
 
   if (slug === "ai-consular-check") {
-    return <AiConsularCheckPage />;
+    const cookieStore = await cookies();
+    const initialUnlocked = Boolean(cookieStore.get("ai_consular_unlocked")?.value);
+
+    return <AiConsularCheckPage initialUnlocked={initialUnlocked} />;
   }
 
   if (slug === "courses") {
