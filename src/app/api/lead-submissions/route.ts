@@ -34,6 +34,7 @@ async function sendLeadEmail({
       Authorization: `Bearer ${resendApiKey}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(15000),
     body: JSON.stringify({
       from: fromEmail,
       to: toEmail,
@@ -57,8 +58,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  const message = getString(body.message).slice(0, MAX_MESSAGE_LENGTH);
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+
+  const message = getString(body.message);
   const email = getString(body.email);
+
+  if (message.length > MAX_MESSAGE_LENGTH || email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    return NextResponse.json({ error: "Please check your email and message length." }, { status: 400 });
+  }
 
   if (!message) {
     return NextResponse.json(

@@ -1,3 +1,4 @@
+import { ACCESS_COOKIE, readToken } from "@/lib/payment";
 import { AboutPage } from "@/components/pages/AboutPage";
 import { AiConsularCheckPage } from "@/components/pages/AiConsularCheckPage";
 import { ContactPage } from "@/components/pages/ContactPage";
@@ -70,9 +71,17 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
 
   if (slug === "ai-consular-check") {
     const cookieStore = await cookies();
-    const initialUnlocked = Boolean(cookieStore.get("ai_consular_unlocked")?.value);
+    const initialUnlocked = Boolean(readToken(cookieStore.get(ACCESS_COOKIE)?.value, "access"));
 
-    return <AiConsularCheckPage initialUnlocked={initialUnlocked} />;
+    const configuredAmount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "49.99");
+    const configuredCurrency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
+    return (
+      <AiConsularCheckPage
+        initialUnlocked={initialUnlocked}
+        paymentAmount={Number.isFinite(configuredAmount) && configuredAmount > 0 ? configuredAmount : 49.99}
+        paymentCurrency={/^[A-Z]{3}$/.test(configuredCurrency) ? configuredCurrency : "USD"}
+      />
+    );
   }
 
   if (slug === "courses") {

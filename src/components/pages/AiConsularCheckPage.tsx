@@ -1,11 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
 import { WhatsAppLeadActions } from "@/components/ui/WhatsAppLeadActions";
 import { worldCountries } from "@/data/countries";
+import { extractDocumentText } from "@/lib/documentText";
 
 const sampleWeakSop =
   "I want to study in Canada because it is a good country. My uncle will send me money for my fees. I have finished my first degree and I want to do another one in business. I will come back to Nigeria after school if I get a good job here. Thank you for considering my application.";
@@ -25,9 +26,6 @@ const toolTabs = [
   ["itinerary", "Itinerary Planner"],
   ["interview", "Practice Interview"],
 ] as const;
-
-const flutterwavePaymentUrl =
-  "https://flutterwave.com/pay/s9k5ikoxfe17?_gl=1%2a1h1zure%2a_ga%2aMTYzMzYwOTU1Mi4xNzg3NzgzNDA0%2a_ga_KQ9NSEMFCF%2aczE3OTAwOTYzMDckbzIkZzEkdDE3OTAwOTY0NjgkajEyJGwwJGgw";
 
 type ActiveTool = (typeof toolTabs)[number][0];
 type EntryMode = "upload" | "paste" | "scratch";
@@ -374,11 +372,23 @@ function hasPaymentFailure() {
 
 export function AiConsularCheckPage({
   initialUnlocked = false,
+  paymentAmount = 49.99,
+  paymentCurrency = "USD",
 }: {
   initialUnlocked?: boolean;
+  paymentAmount?: number;
+  paymentCurrency?: string;
 }) {
   const paymentFailed = hasPaymentFailure();
-  const [unlocked] = useState(initialUnlocked);
+  const price = `${paymentAmount.toFixed(2)} ${paymentCurrency}`;
+  const [unlocked, setUnlocked] = useState(initialUnlocked);
+  const [paymentEmail, setPaymentEmail] = useState("");
+  const [paymentError, setPaymentError] = useState("");
+  const [isStartingPayment, setIsStartingPayment] = useState(false);
+  const checkoutPending = useRef(false);
+  const [uploadError, setUploadError] = useState("");
+  const [isReadingFile, setIsReadingFile] = useState(false);
+  const uploadVersion = useRef(0);
   const [showPaymentPrompt, setShowPaymentPrompt] = useState(false);
   const [activeTool, setActiveTool] = useState<ActiveTool>("document");
   const [country, setCountry] = useState("Canada");
@@ -439,6 +449,7 @@ export function AiConsularCheckPage({
     : Math.min(100, 35 + answers.length * 10 + Math.min(25, answeredWords));
 
   async function runAssessment() {
+    if (isReadingFile) return;
     const trimmedDocument = documentText.trim();
 
     setAssessmentError("");
@@ -469,6 +480,13 @@ export function AiConsularCheckPage({
         error?: string;
       };
 
+      if (response.status === 402) {
+        setUnlocked(false);
+        setAnalysis(null);
+        setShowPaymentPrompt(true);
+        return;
+      }
+
       if (!response.ok || !data.report) {
         throw new Error(data.error ?? "The AI review could not be completed.");
       }
@@ -488,31 +506,45 @@ export function AiConsularCheckPage({
     }
   }
 
-  function processFile(file?: File) {
-    if (!file) {
-      return;
+  async function processFile(file: File | undefined, target: "document" | "cv" | "cover" = "document") {
+    if (!file) return;
+    const version = ++uploadVersion.current;
+    setUploadError("");
+    setIsReadingFile(true);
+    if (target === "document") { setDocumentText(""); setUploadedFile(""); setAnalysis(null); }
+    else if (target === "cv") { setCvText(""); setCvResult(null); }
+    else { setCoverText(""); setCoverResult(""); }
+    try {
+      const text = await extractDocumentText(file);
+      if (version !== uploadVersion.current) return;
+      if (target === "document") { setDocumentText(text); setUploadedFile(file.name); }
+      else if (target === "cv") setCvText(text);
+      else setCoverText(text);
+    } catch (error) {
+      if (version === uploadVersion.current) setUploadError(error instanceof Error ? error.message : "Unable to read that file.");
+    } finally {
+      if (version === uploadVersion.current) setIsReadingFile(false);
     }
+  }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setAssessmentError("That file is over the 10MB limit. Please upload a smaller file.");
-      return;
+  async function startPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (checkoutPending.current) return;
+    checkoutPending.current = true;
+    setIsStartingPayment(true);
+    setPaymentError("");
+    try {
+      const response = await fetch("/api/flutterwave/checkout", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: paymentEmail }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.url) throw new Error(data.error ?? "Unable to start payment.");
+      window.location.assign(data.url);
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : "Unable to start payment.");
+      checkoutPending.current = false;
+      setIsStartingPayment(false);
     }
-
-    setUploadedFile(file.name);
-    const extension = file.name.split(".").pop()?.toLowerCase();
-
-    if (extension === "txt") {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setDocumentText(String(event.target?.result ?? ""));
-      };
-      reader.readAsText(file);
-      return;
-    }
-
-    setDocumentText(
-      `[Uploaded: ${file.name}. For PDF/DOCX, paste the extracted text below or use a live server parser before sending to AI.]`,
-    );
   }
 
   function buildFromScratch() {
@@ -628,6 +660,14 @@ export function AiConsularCheckPage({
   }
 
   function wipeSessionData() {
+    uploadVersion.current++;
+    setIsReadingFile(false);
+    setUploadError("");
+    setScratchPurpose("");
+    setScratchFunds("");
+    setScratchTies("");
+    setCvScratch({ name: "", target: "", experience: "", education: "" });
+    setCoverScratch({ name: "", target: "", strengths: "" });
     setDocumentText("");
     setUploadedFile("");
     setAnalysis(null);
@@ -684,7 +724,7 @@ export function AiConsularCheckPage({
             </div>
             <p className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#5b6870]">
               Private readiness tools only. Nothing is submitted to an embassy, and
-              payment handling should remain with a PCI-compliant provider in production.
+              payments are processed securely by Flutterwave.
             </p>
           </div>
         </div>
@@ -693,15 +733,14 @@ export function AiConsularCheckPage({
       <section className="bg-[#f6fbfd] px-5 py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
           <div className="mb-6 rounded-md border border-[#bfe4e8] bg-[#e8f6fb] px-4 py-3 text-sm leading-6 text-[#0f5e68]">
-            Bank-level encryption in transit and at rest · Documents auto-deleted
-            after your session · Payments processed by a PCI-compliant provider ·
-            NDPR and GDPR-aligned handling
+            Files are read in your browser. Document text is sent to our AI
+            provider when you request a pre-assessment. Payments are handled by Flutterwave.
           </div>
 
           <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d7dfe5] bg-white px-4 py-3 text-sm text-[#5b6870]">
             <span>
-              Your pasted documents and answers live only in this browser session
-              unless you ask a visa officer to review them.
+              Your documents and answers stay in this page until you leave or wipe
+              them. Pre-assessment sends your document text to the AI provider.
             </span>
             <button
               type="button"
@@ -711,6 +750,9 @@ export function AiConsularCheckPage({
               Wipe my data now
             </button>
           </div>
+
+          {isReadingFile ? <p role="status" className="mb-4">Reading your document…</p> : null}
+          {uploadError ? <p role="alert" className="mb-4 text-red-700">{uploadError}</p> : null}
 
           {paymentFailed && !unlocked ? (
             <div className="mb-8 rounded-md border border-[#f0a42f] bg-[#fff7e8] px-4 py-3 text-sm leading-6 text-[#93670f]">
@@ -728,15 +770,14 @@ export function AiConsularCheckPage({
                 AI Consular+ Full Suite
               </h2>
               <p className="mt-3 font-serif text-5xl font-black text-[#f0a42f]">
-                $49.99{" "}
+                {price}{" "}
                 <span className="font-sans text-sm font-semibold text-[#5b6870]">
                   per document / session
                 </span>
               </p>
               <p className="mx-auto mt-3 max-w-xl leading-7 text-[#5b6870]">
-                Unlock every tool below for this application. This site build uses
-                a session unlock placeholder; live payment should be confirmed
-                server-side before access is granted.
+                Unlock every tool below for a one-hour session after your payment
+                has been verified.
               </p>
               <div className="mt-7 grid gap-3 text-left text-sm text-[#1b1f27] sm:grid-cols-2">
                 {[
@@ -808,7 +849,8 @@ export function AiConsularCheckPage({
                         className={inputClass}
                         type="file"
                         accept=".docx,.pdf,.txt"
-                        onChange={(event) => processFile(event.target.files?.[0])}
+                        onChange={(event) => void processFile(event.target.files?.[0])}
+                        disabled={isReadingFile}
                       />
                     </label>
                     {uploadedFile ? (
@@ -874,7 +916,7 @@ export function AiConsularCheckPage({
                       <button
                         type="button"
                         onClick={runAssessment}
-                        disabled={isAssessing}
+                        disabled={isAssessing || isReadingFile}
                         className="rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a] transition hover:bg-[#ffb347] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isAssessing ? "Checking..." : "Run Pre-Assessment Check"}
@@ -940,7 +982,7 @@ export function AiConsularCheckPage({
                     </select>
                   </label>
                   {cvMode === "upload" ? (
-                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={() => setCvText("[Uploaded CV selected. Paste text for a detailed browser preview.]")} />
+                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={(event) => void processFile(event.target.files?.[0], "cv")} disabled={isReadingFile} />
                   ) : null}
                   {cvMode === "paste" ? (
                     <textarea value={cvText} onChange={(event) => setCvText(event.target.value)} className={`${inputClass} min-h-44`} placeholder="Paste your CV here..." />
@@ -953,7 +995,7 @@ export function AiConsularCheckPage({
                       <ScratchArea label="Education and certifications" value={cvScratch.education} onChange={(value) => setCvScratch((current) => ({ ...current, education: value }))} />
                     </div>
                   ) : null}
-                  <button type="button" onClick={runCvOptimize} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
+                  <button type="button" onClick={runCvOptimize} disabled={isReadingFile} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
                     Optimise for ATS
                   </button>
                   {cvResult ? (
@@ -970,7 +1012,7 @@ export function AiConsularCheckPage({
                 <Panel>
                   <EntryToggle value={coverMode} onChange={setCoverMode} labels={["Upload Draft", "Paste Draft", "Start from Scratch"]} />
                   {coverMode === "upload" ? (
-                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={() => setCoverText("[Uploaded cover letter selected. Paste text for a detailed browser preview.]")} />
+                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={(event) => void processFile(event.target.files?.[0], "cover")} disabled={isReadingFile} />
                   ) : null}
                   {coverMode === "paste" ? (
                     <textarea value={coverText} onChange={(event) => setCoverText(event.target.value)} className={`${inputClass} min-h-44`} placeholder="Paste your draft cover letter here..." />
@@ -982,7 +1024,7 @@ export function AiConsularCheckPage({
                       <ScratchInput label="Key strengths" value={coverScratch.strengths} onChange={(value) => setCoverScratch((current) => ({ ...current, strengths: value }))} />
                     </div>
                   ) : null}
-                  <button type="button" onClick={runCoverLetter} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
+                  <button type="button" onClick={runCoverLetter} disabled={isReadingFile} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
                     Generate Cover Letter
                   </button>
                   {coverResult ? (
@@ -1236,7 +1278,7 @@ export function AiConsularCheckPage({
             </div>
 
             <p className="mt-4 text-sm leading-6 text-[#5b6870]">
-              Make the $49.99 payment securely on Flutterwave. After successful
+              Make the {price} payment securely on Flutterwave. After successful
               payment, you will be redirected back here and AI Consular+ will open
               automatically.
             </p>
@@ -1246,15 +1288,19 @@ export function AiConsularCheckPage({
               or store your payment card information.
             </div>
 
-            <div className="mt-6 grid gap-3">
-              <a
-                href={flutterwavePaymentUrl}
-                target="_blank"
-                rel="noreferrer"
+            <form onSubmit={startPayment} className="mt-6 grid gap-3">
+              <label className="text-sm font-semibold">
+                Email for your payment receipt
+                <input type="email" required maxLength={254} value={paymentEmail} onChange={(event) => setPaymentEmail(event.target.value)} className={inputClass} />
+              </label>
+              {paymentError ? <p role="alert" className="text-sm text-red-700">{paymentError}</p> : null}
+              <button
+                type="submit"
+                disabled={isStartingPayment}
                 className="rounded-md bg-[#f0a42f] px-5 py-3 text-center text-sm font-black text-[#07141a] transition hover:bg-[#ffb347]"
               >
-                Proceed to Flutterwave payment
-              </a>
+                {isStartingPayment ? "Opening secure checkout…" : "Proceed to Flutterwave payment"}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowPaymentPrompt(false)}
@@ -1262,7 +1308,7 @@ export function AiConsularCheckPage({
               >
                 Cancel
               </button>
-            </div>
+            </form>
           </div>
         </div>
       ) : null}

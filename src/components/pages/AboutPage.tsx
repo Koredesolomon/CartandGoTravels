@@ -6,7 +6,7 @@ import { useState, type FormEvent } from "react";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
 import { Icon } from "@/components/ui/Icon";
-import { submitLead } from "@/lib/leadSubmission";
+import { useLeadSubmission } from "@/hooks/useLeadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
 const promises = [
@@ -31,20 +31,22 @@ const linkGroups = [
 
 export function AboutPage() {
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
+  const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
 
   async function handleNewsletterSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(formData.get("Email") ?? ""),
       message: formatLeadMessage("newsletter subscription", [
         ["Email", formData.get("Email")],
       ]),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
-    event.currentTarget.reset();
   }
 
   return (
@@ -169,11 +171,21 @@ export function AboutPage() {
               />
               <button
                 type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
                 className="h-12 rounded-md bg-[#07141a] px-5 text-sm font-black text-white"
               >
                 Subscribe
               </button>
-            </form>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
+          </form>
           </div>
 
           <div className="grid gap-5 sm:grid-cols-3">

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
 import { worldCountries } from "@/data/countries";
-import { submitLead } from "@/lib/leadSubmission";
+import { useLeadSubmission } from "@/hooks/useLeadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
 type ServiceFieldConfig = {
@@ -434,6 +434,7 @@ export function ServicesDirectoryPage({
   selectedServiceId = serviceDirectory[0].id,
 }: ServicesDirectoryPageProps) {
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
+  const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
   const selectedService =
     serviceDirectory.find((service) => service.id === selectedServiceId) ??
     serviceDirectory[0];
@@ -444,20 +445,21 @@ export function ServicesDirectoryPage({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const entries = selectedForm.fields.map((field) => [
       field.label,
       formData.get(field.label),
     ]) as [string, FormDataEntryValue | null][];
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(
         formData.get("Email Address") ?? formData.get("Email") ?? "",
       ),
       message: formatLeadMessage(selectedForm.title, entries),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
-    event.currentTarget.reset();
   }
 
   return (
@@ -539,10 +541,20 @@ export function ServicesDirectoryPage({
             </div>
             <button
               type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
               className="mt-6 inline-flex rounded bg-[#c68a2e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#b87d22]"
             >
               {selectedForm.submit}
             </button>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
           </form>
         </div>
 

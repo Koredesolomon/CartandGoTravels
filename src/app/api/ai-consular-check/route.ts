@@ -1,3 +1,4 @@
+import { ACCESS_COOKIE, readToken } from "@/lib/payment";
 import { NextRequest, NextResponse } from "next/server";
 
 const MAX_DOCUMENT_CHARS = 12000;
@@ -23,14 +24,6 @@ type AnthropicResponse = {
     message?: string;
   };
 };
-
-function getClientKey(request: NextRequest) {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    request.headers.get("x-real-ip") ??
-    "local"
-  );
-}
 
 function isRateLimited(clientKey: string) {
   const now = Date.now();
@@ -114,8 +107,10 @@ function normalizeReport(value: unknown) {
     completeness: clamp(report.completeness, 0, 30),
     clarity: clamp(report.clarity, 0, 30),
     ties: clamp(report.ties, 0, 40),
-    flags: Array.isArray(report.flags) ? report.flags : [],
-    roadmap: Array.isArray(report.roadmap) ? report.roadmap : [],
+    flags: Array.isArray(report.flags) ? report.flags.filter((flag): flag is { type: string; title: string; body: string } =>
+      flag !== null && typeof flag === "object" && ["risk", "weak", "excellent"].includes(flag.type) && typeof flag.title === "string" && typeof flag.body === "string",
+    ).slice(0, 6) : [],
+    roadmap: Array.isArray(report.roadmap) ? report.roadmap.filter((item): item is string => typeof item === "string").slice(0, 7) : [],
     showPaySmallSmall: Boolean(report.showPaySmallSmall),
     summary: typeof report.summary === "string" ? report.summary : "",
     disclaimer:
@@ -126,6 +121,11 @@ function normalizeReport(value: unknown) {
 }
 
 export async function POST(request: NextRequest) {
+  const access = readToken(request.cookies.get(ACCESS_COOKIE)?.value, "access");
+  if (!access) {
+    return NextResponse.json({ error: "Payment is required or your session has expired." }, { status: 402 });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) {
@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const clientKey = getClientKey(request);
+  const clientKey = access.ref;
 
   if (isRateLimited(clientKey)) {
     return NextResponse.json(
@@ -154,6 +154,8 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
+
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
 
   const country = typeof body.country === "string" ? body.country.trim() : "";
   const visaClass =
@@ -196,54 +198,59 @@ export async function POST(request: NextRequest) {
     "- disclaimer: string",
   ].join("\n");
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-latest",
-      max_tokens: 1800,
-      temperature: 0.2,
-      system: systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: [
-            `Target country: ${country}`,
-            `Visa class: ${visaClass}`,
-            "Document text:",
-            documentText,
-          ].join("\n"),
-        },
-      ],
-    }),
-  });
-
-  const data = (await response.json()) as AnthropicResponse;
-
-  if (!response.ok) {
-    return NextResponse.json(
-      {
-        error:
-          data.error?.message ??
-          "The AI review service could not complete the request.",
-      },
-      { status: response.status },
-    );
-  }
-
   try {
-    const outputText = getOutputText(data);
-    const report = normalizeReport(JSON.parse(extractJsonObject(outputText)));
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      signal: AbortSignal.timeout(30000),
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL ?? "claude-3-5-sonnet-latest",
+        max_tokens: 1800,
+        temperature: 0.2,
+        system: systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content: [
+              `Target country: ${country}`,
+              `Visa class: ${visaClass}`,
+              "Document text:",
+              documentText,
+            ].join("\n"),
+          },
+        ],
+      }),
+    });
 
-    return NextResponse.json({ report });
+    const data = (await response.json()) as AnthropicResponse;
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          error:
+            data.error?.message ??
+            "The AI review service could not complete the request.",
+        },
+        { status: response.status },
+      );
+    }
+
+    try {
+      const outputText = getOutputText(data);
+      const report = normalizeReport(JSON.parse(extractJsonObject(outputText)));
+
+      return NextResponse.json({ report });
+    } catch {
+      return NextResponse.json(
+        { error: "The AI review returned an unreadable report. Please try again." },
+        { status: 502 },
+      );
+    }
   } catch {
-    return NextResponse.json(
-      { error: "The AI review returned an unreadable report. Please try again." },
-      { status: 502 },
-    );
+    return NextResponse.json({ error: "The AI review service is unavailable. Please try again." }, { status: 502 });
   }
 }

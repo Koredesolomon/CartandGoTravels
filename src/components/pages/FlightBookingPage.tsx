@@ -6,7 +6,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { ButtonLink } from "@/components/ui/ButtonLink";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
 import { Icon } from "@/components/ui/Icon";
-import { submitLead } from "@/lib/leadSubmission";
+import { useLeadSubmission } from "@/hooks/useLeadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
 const airports = [
@@ -61,6 +61,7 @@ export function FlightBookingPage() {
   const [passengers, setPassengers] = useState(1);
   const [cabin, setCabin] = useState("Economy");
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
+  const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
 
   const summary = useMemo(
     () => `${tripType} - ${from} to ${to} - ${passengers} passenger${passengers > 1 ? "s" : ""} - ${cabin}`,
@@ -75,9 +76,10 @@ export function FlightBookingPage() {
   async function handleFlightSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(formData.get("Email Address") ?? ""),
       message: formatLeadMessage("a flight quote", [
         ["Email", formData.get("Email Address")],
@@ -89,17 +91,18 @@ export function FlightBookingPage() {
         ["Travelers", passengers],
         ["Cabin", cabin],
       ]),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
-    event.currentTarget.reset();
   }
 
   async function handleHotelSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(formData.get("Email Address") ?? ""),
       message: formatLeadMessage("a hotel quote", [
         ["Email", formData.get("Email Address")],
@@ -108,9 +111,9 @@ export function FlightBookingPage() {
         ["Check-in", formData.get("Check-in")],
         ["Check-out", formData.get("Check-out")],
       ]),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
-    event.currentTarget.reset();
   }
 
   return (
@@ -295,13 +298,23 @@ export function FlightBookingPage() {
               </p>
               <button
                 type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
                 className="inline-flex h-13 items-center justify-center gap-2 rounded-md bg-[#e8aa4e] px-6 text-sm font-semibold text-[#05131d] transition hover:bg-[#f3b94c]"
               >
                 <Icon name="Search" className="h-4 w-4" />
                 Search fares
               </button>
             </div>
-              </form>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
+          </form>
             ) : (
               <form onSubmit={handleHotelSubmit}>
                 <label className="mb-5 block">
@@ -370,13 +383,23 @@ export function FlightBookingPage() {
                   </p>
                   <button
                     type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
                     className="inline-flex h-13 items-center justify-center gap-2 rounded-md bg-[#e8aa4e] px-6 text-sm font-semibold text-[#05131d] transition hover:bg-[#f3b94c]"
                   >
                     <Icon name="Hotel" className="h-4 w-4" />
                     Request hotel quote
                   </button>
                 </div>
-              </form>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
+          </form>
             )}
           </div>
         </div>

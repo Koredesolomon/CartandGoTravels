@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
-import { submitLead } from "@/lib/leadSubmission";
+import { useLeadSubmission } from "@/hooks/useLeadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
 const contactCards = [
@@ -39,13 +39,15 @@ const inputClass =
 
 export function ContactPage() {
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
+  const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(formData.get("Email") ?? ""),
       message: formatLeadMessage("a free consultation", [
         ["Full name", formData.get("Full Name")],
@@ -54,9 +56,9 @@ export function ContactPage() {
         ["Service of interest", formData.get("Service of Interest")],
         ["Message", formData.get("Tell us more")],
       ]),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
-    event.currentTarget.reset();
   }
 
   return (
@@ -140,11 +142,21 @@ export function ContactPage() {
             <div className="mt-6">
               <button
                 type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
                 className="inline-flex rounded bg-[#c68a2e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#b87d22]"
               >
                 Request Consultation
               </button>
             </div>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
           </form>
         </div>
 

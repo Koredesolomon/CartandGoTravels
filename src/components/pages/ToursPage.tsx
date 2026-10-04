@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { Icon } from "@/components/ui/Icon";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
-import { submitLead } from "@/lib/leadSubmission";
+import { useLeadSubmission } from "@/hooks/useLeadSubmission";
 import { formatLeadMessage } from "@/lib/whatsapp";
 
 const tours = [
@@ -272,6 +272,7 @@ export function ToursPage() {
   const [selectedTours, setSelectedTours] = useState<string[]>([]);
   const [openChecklist, setOpenChecklist] = useState<string | null>(null);
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
+  const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
 
   function openRequestPopup(tourName: string) {
     setSelectedTours((current) =>
@@ -291,9 +292,10 @@ export function ToursPage() {
   async function handleTourSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
 
-    await submitLead({
+    const sent = await sendLead({
       email: String(formData.get("Email Address") ?? ""),
       message: formatLeadMessage("a tour package quote", [
         ["Full name", formData.get("Full Name")],
@@ -304,10 +306,10 @@ export function ToursPage() {
         ["Destinations", selectedTours.join(", ")],
         ["Extra notes", formData.get("Extra Notes")],
       ]),
-    });
+    }, form);
+    if (!sent) return;
     setIsThankYouOpen(true);
     setIsPopupOpen(false);
-    event.currentTarget.reset();
   }
 
   return (
@@ -508,6 +510,8 @@ export function ToursPage() {
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 <button
                   type="submit"
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
                   className="inline-flex rounded bg-[#c68a2e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#b87d22]"
                 >
                   Submit package request
@@ -520,7 +524,15 @@ export function ToursPage() {
                   Cancel
                 </button>
               </div>
-            </form>
+            {submissionError ? (
+              <p role="alert" className="mt-3 text-sm text-red-700">
+                {submissionError}
+              </p>
+            ) : null}
+            {isSubmitting ? (
+              <p role="status" className="mt-3 text-sm">Sending your request…</p>
+            ) : null}
+          </form>
           </div>
         </div>
       ) : null}
