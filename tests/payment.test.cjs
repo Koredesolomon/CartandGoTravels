@@ -162,3 +162,31 @@ test('PDF uploads extract actual text and reject documents without readable text
     await assert.rejects(extractDocumentText(new File(['invalid'], 'bad.pdf')), /Unable to read/);
   } finally { worker.destroy(); overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
 });
+
+test('checkout reports safe configuration and provider failures without logging secrets', async () => {
+  const savedSecret = process.env.PAYMENT_SESSION_SECRET;
+  const logs = [];
+  const originalLog = console.error;
+  console.error = (...args) => logs.push(args);
+  const request = () => new NextRequest('https://site.test/api/flutterwave/checkout', { method: 'POST', headers: { origin: 'https://site.test', 'content-type': 'application/json' }, body: JSON.stringify({ email: 'customer@example.com' }) });
+  try {
+    delete process.env.PAYMENT_SESSION_SECRET;
+    const missing = await checkout.POST(request());
+    assert.equal(missing.status, 503);
+    assert.equal((await missing.json()).code, 'PAYMENT_CONFIGURATION_INVALID');
+    assert.match(logs[0][1].configurationIssue, /PAYMENT_SESSION_SECRET/);
+    process.env.PAYMENT_SESSION_SECRET = savedSecret;
+    global.fetch = async () => Response.json({ status: 'error', message: 'Sensitive provider payload' }, { status: 401 });
+    const rejected = await checkout.POST(request());
+    assert.equal((await rejected.json()).code, 'FLUTTERWAVE_AUTH_FAILED');
+    assert.equal(logs[1][1].upstreamStatus, 401);
+    const logged = JSON.stringify(logs);
+    assert.ok(!logged.includes(savedSecret));
+    assert.ok(!logged.includes('customer@example.com'));
+    assert.ok(!logged.includes('Sensitive provider payload'));
+  } finally {
+    process.env.PAYMENT_SESSION_SECRET = savedSecret;
+    global.fetch = originalFetch;
+    console.error = originalLog;
+  }
+});
