@@ -1,3 +1,4 @@
+import { checkPaymentStorage, PaymentStorageError } from "@/lib/database";
 import { NextRequest, NextResponse } from "next/server";
 import { CHECKOUT_COOKIE, newCheckoutRef, paymentConfig, PaymentConfigurationError, signToken } from "@/lib/payment";
 
@@ -11,6 +12,8 @@ export async function POST(request: NextRequest) {
   try {
     const config = paymentConfig();
     if (request.headers.get("origin") !== config.appUrl.origin) return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
+    stage = "payment_storage";
+    await checkPaymentStorage();
     const ref = newCheckoutRef();
     const signed = signToken("checkout", ref, 3600);
     stage = "flutterwave_request";
@@ -30,6 +33,7 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (error) {
     const code = error instanceof PaymentConfigurationError ? "PAYMENT_CONFIGURATION_INVALID"
+      : stage === "payment_storage" ? "PAYMENT_DATABASE_UNAVAILABLE"
       : upstreamStatus === 401 || upstreamStatus === 403 ? "FLUTTERWAVE_AUTH_FAILED"
       : stage === "flutterwave_response" ? "FLUTTERWAVE_CHECKOUT_REJECTED"
       : "PAYMENT_PROVIDER_UNREACHABLE";
@@ -37,6 +41,7 @@ export async function POST(request: NextRequest) {
     console.error("Payment checkout failed", {
       reference, code, stage, upstreamStatus,
       configurationIssue: error instanceof PaymentConfigurationError ? error.message : undefined,
+      databaseIssue: error instanceof PaymentStorageError ? error.message : undefined,
     });
     return NextResponse.json({ error: "Payment checkout is unavailable. Please try again later.", code, reference }, { status: 503 });
   }

@@ -20,6 +20,8 @@ function load(relative) {
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }
+let executeDatabase = async () => [[], []];
+overrides.set('mysql2/promise', { createPool: () => ({ execute: (...args) => executeDatabase(...args) }) });
 const payment = load('src/lib/payment.ts');
 const { NextRequest } = require('next/server');
 const callback = load('src/app/ai-consular-check/payment-callback/route.ts');
@@ -27,7 +29,7 @@ const ai = load('src/app/api/ai-consular-check/route.ts');
 const verify = load('src/app/api/flutterwave/verify/route.ts');
 const checkout = load('src/app/api/flutterwave/checkout/route.ts');
 const originalFetch = global.fetch;
-Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'test-secret-that-is-more-than-32-characters', FLUTTERWAVE_SECRET_KEY: 'test', FLUTTERWAVE_AMOUNT: '49.99', FLUTTERWAVE_CURRENCY: 'USD', UPSTASH_REDIS_REST_URL: 'https://redis.test', UPSTASH_REDIS_REST_TOKEN: 'test', APP_URL: 'https://site.test' });
+Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'test-secret-that-is-more-than-32-characters', FLUTTERWAVE_SECRET_KEY: 'test', FLUTTERWAVE_AMOUNT: '49.99', FLUTTERWAVE_CURRENCY: 'USD', DB_HOST: 'localhost', DB_PORT: '3306', DB_USER: 'test-user', DB_PASSWORD: 'test-password', DB_NAME: 'test-database', APP_URL: 'https://site.test' });
 
 function callbackRequest(id, token) {
   return new NextRequest(`https://site.test/ai-consular-check/payment-callback?transaction_id=${id}&status=successful`, { headers: token ? { cookie: `${payment.CHECKOUT_COOKIE}=${token}` } : {} });
@@ -56,15 +58,15 @@ test('AI and verification APIs deny unpaid and legacy-cookie requests before ups
 test('callback binds a verified payment to checkout and prevents concurrent redemption and replay', async () => {
   const consumed = new Set();
   let ref = 'checkout-ref';
-  global.fetch = async (url, init) => {
-    if (url === 'https://redis.test') {
-      const command = JSON.parse(init.body);
-      assert.equal(command[0], 'SET');
-      assert.equal(command.at(-1), 'NX');
-      const exists = consumed.has(command[1]);
-      consumed.add(command[1]);
-      return Response.json({ result: exists ? null : 'OK' });
-    }
+  executeDatabase = async (options, values) => {
+    assert.match(options.sql, /^INSERT INTO payment_redemptions/);
+    assert.match(options.sql, /VALUES \(\?, \?, \?\)/);
+    const key = values[0] + ':' + values[1];
+    if (consumed.has(key)) throw Object.assign(new Error('Duplicate entry'), { code: 'ER_DUP_ENTRY' });
+    consumed.add(key);
+    return [{ affectedRows: 1 }, []];
+  };
+  global.fetch = async (url) => {
     const id = String(url).split('/').at(-2);
     return Response.json({ status: 'success', data: { id: Number(id), tx_ref: ref, status: 'successful', currency: 'USD', amount: 49.99 } });
   };
@@ -79,7 +81,7 @@ test('callback binds a verified payment to checkout and prevents concurrent rede
     const success = results.find(r => r.headers.get('location').endsWith('payment=success'));
     assert.ok(payment.readToken(success.cookies.get(payment.ACCESS_COOKIE).value, 'access'));
     assert.match((await callback.GET(callbackRequest('123', token))).headers.get('location'), /payment=failed/);
-  } finally { global.fetch = originalFetch; }
+  } finally { global.fetch = originalFetch; executeDatabase = async () => [[], []]; }
 });
 
 test('payment verification rejects underpayment, wrong currency, failed and mismatched transactions', async () => {
@@ -90,7 +92,9 @@ test('payment verification rejects underpayment, wrong currency, failed and mism
     }
     await assert.rejects(payment.verifyPayment('../123'));
     global.fetch = async () => Response.json({ error: 'unavailable' }, { status: 503 });
+    executeDatabase = async () => { throw new Error('Database unavailable'); };
     await assert.rejects(payment.claimPayment('123', 'ref'));
+    executeDatabase = async () => [[], []];
   } finally { global.fetch = originalFetch; }
 });
 
@@ -189,4 +193,33 @@ test('checkout reports safe configuration and provider failures without logging 
     global.fetch = originalFetch;
     console.error = originalLog;
   }
+});
+
+
+test('checkout refuses to create a provider link when the payment table is unavailable', async () => {
+  const log = console.error;
+  console.error = () => {};
+  executeDatabase = async () => { throw Object.assign(new Error('Table missing'), { code: 'ER_NO_SUCH_TABLE' }); };
+  global.fetch = async () => { throw new Error('Flutterwave must not be called'); };
+  try {
+    const response = await checkout.POST(new NextRequest('https://site.test/api/flutterwave/checkout', { method: 'POST', headers: { origin: 'https://site.test' }, body: JSON.stringify({ email: 'customer@example.com' }) }));
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'PAYMENT_DATABASE_UNAVAILABLE');
+  } finally { executeDatabase = async () => [[], []]; global.fetch = originalFetch; console.error = log; }
+});
+
+test('webhook records and redeemed payments use independent keys', async () => {
+  const records = new Set();
+  executeDatabase = async (options, values) => {
+    const key = values[0] + ':' + values[1];
+    if (records.has(key)) throw Object.assign(new Error('Duplicate'), { code: 'ER_DUP_ENTRY' });
+    records.add(key);
+    return [{ affectedRows: 1 }, []];
+  };
+  try {
+    assert.equal(await payment.claimPayment('456', 'ref', 'verified-webhook'), true);
+    assert.equal(await payment.claimPayment('456', 'ref'), true);
+    assert.equal(await payment.claimPayment('456', 'ref', 'verified-webhook'), false);
+    assert.equal(await payment.claimPayment('456', 'ref'), false);
+  } finally { executeDatabase = async () => [[], []]; }
 });

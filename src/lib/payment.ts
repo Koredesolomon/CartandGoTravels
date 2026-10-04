@@ -1,10 +1,11 @@
+import { databaseConfig, getDatabase } from "@/lib/database";
+import { PaymentConfigurationError } from "@/lib/paymentConfiguration";
+export { PaymentConfigurationError } from "@/lib/paymentConfiguration";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 export const ACCESS_COOKIE = "ai_consular_access";
 export const CHECKOUT_COOKIE = "ai_consular_checkout";
 export const ACCESS_SECONDS = 3600;
-
-export class PaymentConfigurationError extends Error {}
 
 type Token = { purpose: "checkout" | "access"; ref: string; expires: number };
 function secret() {
@@ -33,9 +34,7 @@ export function paymentConfig() {
   const amount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "49.99");
   const currency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
   const key = process.env.FLUTTERWAVE_SECRET_KEY;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  const missing = [!key && "FLUTTERWAVE_SECRET_KEY", !url && "UPSTASH_REDIS_REST_URL", !token && "UPSTASH_REDIS_REST_TOKEN"].filter(Boolean);
+  const missing = [!key && "FLUTTERWAVE_SECRET_KEY"].filter(Boolean);
   if (missing.length) throw new PaymentConfigurationError(`Missing environment variables: ${missing.join(", ")}.`);
   if (!Number.isFinite(amount) || amount <= 0) throw new PaymentConfigurationError("FLUTTERWAVE_AMOUNT must be a positive number.");
   if (!/^[A-Z]{3}$/.test(currency)) throw new PaymentConfigurationError("FLUTTERWAVE_CURRENCY must be a three-letter currency code.");
@@ -44,7 +43,8 @@ export function paymentConfig() {
   catch { throw new PaymentConfigurationError("APP_URL must be a valid absolute URL."); }
   if (process.env.NODE_ENV === "production" && appUrl.protocol !== "https:") throw new PaymentConfigurationError("APP_URL must use HTTPS in production.");
   if (appUrl.username || appUrl.password || appUrl.pathname !== "/" || appUrl.search || appUrl.hash) throw new PaymentConfigurationError("APP_URL must contain only the website origin, without credentials, a path, or query parameters.");
-  return { amount, currency, key: key!, url: url!, token: token!, appUrl };
+  databaseConfig();
+  return { amount, currency, key: key!, appUrl };
 }
 export function newCheckoutRef() { return `cartandgo-${randomUUID()}`; }
 export async function verifyPayment(transactionId: string) {
@@ -58,15 +58,18 @@ export async function verifyPayment(transactionId: string) {
   if (!response.ok || result.status !== "success" || !data || String(data.id) !== transactionId || data.status !== "successful" || data.currency !== config.currency || !Number.isFinite(Number(data.amount)) || Number(data.amount) < config.amount || typeof data.tx_ref !== "string") throw new Error("Payment could not be verified.");
   return { id: transactionId, ref: data.tx_ref as string };
 }
-// SET NX is atomic across concurrent requests and deployments. Do not expire consumed payment IDs.
+// A database primary key makes payment redemption atomic across instances and restarts.
 export async function claimPayment(transactionId: string, ref: string, namespace: "consumed-payment" | "verified-webhook" = "consumed-payment") {
-  const config = paymentConfig();
-  const response = await fetch(config.url, {
-    method: "POST", headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(["SET", `cartandgo:${namespace}:${transactionId}`, ref, "NX"]),
-    cache: "no-store", signal: AbortSignal.timeout(10000),
-  });
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error("Payment storage is unavailable.");
-  return data.result === "OK";
+  if (!/^\d{1,64}$/.test(transactionId) || !ref || ref.length > 128 || !/^[\x20-\x7e]+$/.test(ref)) throw new Error("Invalid payment reference.");
+  const db = await getDatabase();
+  try {
+    await db.execute({
+      sql: "INSERT INTO payment_redemptions (namespace, transaction_id, checkout_ref) VALUES (?, ?, ?)",
+      timeout: 10000,
+    }, [namespace, transactionId, ref]);
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ER_DUP_ENTRY") return false;
+    throw new Error("Payment storage is unavailable.");
+  }
 }
