@@ -6,7 +6,6 @@ const footerLinks = [
   ["Flights & Hotels", "/services?service=flights#flights"],
   ["Online Courses", "/services"],
   ["Scholarships", "/services"],
-  ["Student Loans", "/services"],
   ["About Us", "/about"],
 ] as const;
 
@@ -30,7 +29,7 @@ export function SiteFooter() {
           </div>
           <p className="max-w-md text-sm leading-7 text-white/70">
             Visa processing, immigration, flights, hotels, certified online courses,
-            student loans and global scholarships under one roof.
+            and global scholarships under one roof.
           </p>
         </div>
 
