@@ -23,7 +23,7 @@ const faqs = [
 
 export function FaqSection() {
   return (
-    <section className="bg-white px-5 py-20 lg:px-8">
+    <section className="bg-white px-[5%] py-20 md:px-[4%] xl:px-[8%]">
       <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[.85fr_1.15fr]">
         <div>
           <p className="text-xs font-black uppercase text-[#0098ba]">Get Clarity</p>
