@@ -84,6 +84,52 @@ test('callback binds a verified payment to checkout and prevents concurrent rede
   } finally { global.fetch = originalFetch; executeDatabase = async () => [[], []]; }
 });
 
+test('callback redirects to APP_URL and sets secure access behind an internal HTTP proxy', async () => {
+  const ref = 'proxy-checkout-ref';
+  global.fetch = async () => Response.json({ status: 'success', data: { id: 789, tx_ref: ref, status: 'successful', currency: 'USD', amount: 49.99 } });
+  try {
+    for (const origin of ['http://0.0.0.0:3000', 'https://0.0.0.0:3000']) {
+      const response = await callback.GET(new NextRequest(`${origin}/ai-consular-check/payment-callback?transaction_id=789&status=successful`, {
+        headers: { cookie: `${payment.CHECKOUT_COOKIE}=${payment.signToken('checkout', ref)}`, 'x-forwarded-host': 'untrusted.test' },
+      }));
+      assert.equal(response.headers.get('location'), 'https://site.test/ai-consular-check?payment=success');
+      const access = response.cookies.get(payment.ACCESS_COOKIE);
+      assert.equal(access.secure, true);
+      assert.equal(access.httpOnly, true);
+      assert.ok(payment.readToken(access.value, 'access'));
+    }
+  } finally { global.fetch = originalFetch; }
+});
+
+test('callback failures also redirect to APP_URL behind a proxy', async () => {
+  const token = payment.signToken('checkout', 'expected-ref');
+  const request = (status, cookie = '') => new NextRequest(`http://0.0.0.0:3000/ai-consular-check/payment-callback?transaction_id=789&status=${status}`, { headers: { cookie } });
+  const assertFailed = response => {
+    assert.equal(response.headers.get('location'), 'https://site.test/ai-consular-check?payment=failed');
+    assert.equal(response.cookies.get(payment.ACCESS_COOKIE), undefined);
+  };
+  try {
+    assertFailed(await callback.GET(request('successful')));
+    assertFailed(await callback.GET(request('cancelled', `${payment.CHECKOUT_COOKIE}=${token}`)));
+    global.fetch = async () => Response.json({ status: 'success', data: { id: 789, tx_ref: 'wrong-ref', status: 'successful', currency: 'USD', amount: 49.99 } });
+    assertFailed(await callback.GET(request('successful', `${payment.CHECKOUT_COOKIE}=${token}`)));
+    global.fetch = async () => { throw new Error('Provider unavailable'); };
+    assertFailed(await callback.GET(request('successful', `${payment.CHECKOUT_COOKIE}=${token}`)));
+  } finally { global.fetch = originalFetch; }
+});
+
+test('callback refuses an invalid APP_URL before verifying or consuming a payment', async () => {
+  const appUrl = process.env.APP_URL;
+  global.fetch = async () => { throw new Error('Provider must not be called'); };
+  try {
+    process.env.APP_URL = 'invalid-url';
+    const response = await callback.GET(callbackRequest('789', payment.signToken('checkout', 'ref')));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('location'), null);
+    assert.equal(response.cookies.get(payment.ACCESS_COOKIE), undefined);
+  } finally { process.env.APP_URL = appUrl; global.fetch = originalFetch; }
+});
+
 test('payment verification rejects underpayment, wrong currency, failed and mismatched transactions', async () => {
   try {
     for (const patch of [{ amount: 1 }, { amount: 'NaN' }, { currency: 'NGN' }, { status: 'failed' }, { id: 456 }]) {

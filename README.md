@@ -42,7 +42,7 @@ Copy `.env.example` to `.env.local` and supply your own credentials. Never commi
 - Email inquiries: `RESEND_API_KEY`, `LEAD_FROM_EMAIL`, `LEAD_TO_EMAIL`.
 - AI review: `ANTHROPIC_API_KEY` and a model available to your Anthropic account in `ANTHROPIC_MODEL`.
 - Paid access: `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_SECRET_HASH`, `FLUTTERWAVE_AMOUNT`, `FLUTTERWAVE_CURRENCY`.
-- Set `APP_URL` to the site's canonical origin (HTTPS in production).
+- Set `APP_URL` to the site's canonical origin (HTTPS in production), for example `https://www.cartandgotravels.com` if that is the host used by visitors. Both checkout and callback redirects use this origin; never set it to an internal bind address such as `0.0.0.0:3000`. Apply environment changes and rebuild/restart the production app.
 - Generate `PAYMENT_SESSION_SECRET` with `openssl rand -hex 32`. Keep it consistent across instances. Rotating it invalidates existing checkout and access cookies.
 - Configure Hostinger MySQL using `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`. Use the full database and user names displayed by hPanel, including its account prefix. Hostinger normally uses `localhost` and port `3306` for apps hosted on the same server; confirm the host shown for your database. `DB_SSL=true` enables certificate-verified TLS if your database requires it.
 - Create a database and user in Websites → Dashboard → Databases → Management. Open phpMyAdmin, select that database, and run `database/payment-redemptions.sql` in the SQL tab. Add the credentials to the Node.js app's environment variables, apply changes, and restart the app. See https://www.hostinger.com/support/connecting-a-hostinger-mysql-database-to-a-node-js-application/.
