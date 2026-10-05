@@ -40,6 +40,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 Copy `.env.example` to `.env.local` and supply your own credentials. Never commit `.env.local`.
 
 - Email inquiries: `RESEND_API_KEY`, `LEAD_FROM_EMAIL`, `LEAD_TO_EMAIL`.
+- All inquiry forms send their complete submission as a branded PDF attachment to `LEAD_TO_EMAIL`, with a short cover email. The visitor's email remains the reply-to address. PDFs wrap long responses and continue onto additional pages. The bundled Noto Sans font is included in the email route's deployment trace; retain `src/assets/fonts` when deploying from source.
 - AI review: `ANTHROPIC_API_KEY` and a model available to your Anthropic account in `ANTHROPIC_MODEL`.
 - Paid access: `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_SECRET_HASH`, `FLUTTERWAVE_AMOUNT`, `FLUTTERWAVE_CURRENCY`.
 - Set `APP_URL` to the site's canonical origin (HTTPS in production), for example `https://www.cartandgotravels.com` if that is the host used by visitors. Both checkout and callback redirects use this origin; never set it to an internal bind address such as `0.0.0.0:3000`. Apply environment changes and rebuild/restart the production app.
@@ -51,6 +52,6 @@ Copy `.env.example` to `.env.local` and supply your own credentials. Never commi
 
 Checkout uses Flutterwave Standard and returns to `/ai-consular-check/payment-callback`. Configure the Flutterwave webhook as `/api/flutterwave/webhook` with the secret hash above. A payment unlocks a signed one-hour session only in the browser that started checkout. The AI endpoint independently verifies that session. Webhook delivery does not grant access.
 
-TXT, DOCX and text-based PDF files are extracted in the browser (10MB, 100 PDF pages, and 12,000 extracted characters maximum). Scanned or password-protected PDFs require pasted text instead. `predev` and `prebuild` copy the PDF worker and supporting font/CMap/WASM assets from the installed PDF.js package; deploy these generated public assets with the app.
+TXT, DOCX and text-based PDF files are extracted in the browser (10MB, 100 PDF pages, and 12,000 extracted characters maximum). Scanned or password-protected PDFs require pasted text instead. `predev` and `prebuild` copy the PDF worker and supporting font/CMap/WASM assets from the installed PDF.js package; deploy these generated public assets with the app. The worker is served at `/pdf.worker.min.js` with a JavaScript content type because some hosts serve `.mjs` as `text/plain`, which browsers reject for module workers.
 
 If a real API credential has ever been placed in an example file, revoke it in the provider account and issue a replacement. Removing it from the file does not revoke it.

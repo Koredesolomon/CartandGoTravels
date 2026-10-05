@@ -46,6 +46,13 @@ export function Icon({ name, className = "h-5 w-5" }: IconProps) {
         <path d="m9 15 2 2 4-4" />
       </>
     ),
+    Upload: (
+      <>
+        <path d="M12 16V3" />
+        <path d="m7 8 5-5 5 5" />
+        <path d="M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" />
+      </>
+    ),
     Plane: <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2l-1.4 2.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3 2.3-1.1Z" />,
     Search: (
       <>

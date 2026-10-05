@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  outputFileTracingIncludes: {
+    "/api/lead-submissions": ["./src/assets/fonts/*.ttf"],
+  },
+  async headers() {
+    return [
+      {
+        source: "/pdf.worker.min.js",
+        headers: [{ key: "Content-Type", value: "application/javascript; charset=utf-8" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

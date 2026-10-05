@@ -55,6 +55,29 @@ test('AI and verification APIs deny unpaid and legacy-cookie requests before ups
   } finally { global.fetch = originalFetch; }
 });
 
+test('consular requires a paid session in every environment even with the retired bypass flag', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT };
+  const { getConsularAccessRef } = load('src/lib/consularAccess.ts');
+  global.fetch = async () => { throw new Error('Unpaid requests must not call upstream'); };
+  const request = () => new NextRequest('http://localhost:3000/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country: 'Canada', visaClass: 'Study Permit', documentText: 'Synthetic application text' }) });
+  try {
+    process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
+    for (const mode of ['development', 'production', 'test']) {
+      process.env.NODE_ENV = mode;
+      assert.equal(getConsularAccessRef(undefined), null);
+      assert.equal((await verify.POST(request())).status, 402);
+      assert.equal((await ai.POST(request())).status, 402);
+      const paidRequest = request();
+      paidRequest.cookies.set(payment.ACCESS_COOKIE, payment.signToken('access', 'paid-ref'));
+      assert.equal((await verify.POST(paidRequest)).status, 200);
+    }
+    assert.equal(getConsularAccessRef(payment.signToken('access', 'paid-ref')), 'paid-ref');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    global.fetch = originalFetch;
+  }
+});
+
 test('callback binds a verified payment to checkout and prevents concurrent redemption and replay', async () => {
   const consumed = new Set();
   let ref = 'checkout-ref';
@@ -203,7 +226,7 @@ test('PDF uploads extract actual text and reject documents without readable text
   const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
   pdfjs.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
   const worker = new pdfjs.PDFWorker();
-  // Use a filesystem worker in Node; production serves the same worker through /pdf.worker.min.mjs.
+  // Use a filesystem worker in Node; production serves the same worker through /pdf.worker.min.js.
   overrides.set('pdfjs-dist/legacy/build/pdf.mjs', { ...pdfjs, getDocument: options => pdfjs.getDocument({ ...options, worker, standardFontDataUrl: path.join(root, "node_modules/pdfjs-dist/standard_fonts/"), cMapUrl: path.join(root, "node_modules/pdfjs-dist/cmaps/"), wasmUrl: path.join(root, "node_modules/pdfjs-dist/wasm/") }) });
   try {
     const { extractDocumentText } = load('src/lib/documentText.ts');

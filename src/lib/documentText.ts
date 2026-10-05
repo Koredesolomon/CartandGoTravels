@@ -15,7 +15,7 @@ export async function extractDocumentText(file: File): Promise<string> {
       text = result.value;
     } else if (extension === "pdf") {
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+      pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
       const loading = pdfjs.getDocument({
         data: new Uint8Array(await file.arrayBuffer()),
         standardFontDataUrl: "/pdf-assets/standard_fonts/",

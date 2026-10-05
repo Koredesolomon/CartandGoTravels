@@ -16,6 +16,35 @@
   --font-mono: var(--font-geist-mono);
 }
 
+@layer base {
+  :where(
+    button,
+    a[href],
+    summary,
+    [role="button"],
+    select,
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    input[type="file"],
+    input[type="checkbox"],
+    input[type="radio"]
+  ):not(:disabled):not([aria-disabled="true"]),
+  label:has(input[type="checkbox"]:enabled),
+  label:has(input[type="radio"]:enabled),
+  input[type="file"]:enabled::file-selector-button {
+    cursor: pointer;
+  }
+
+  :where(button, a[href], summary, [role="button"], select, input):is(
+    :disabled,
+    [aria-disabled="true"]
+  ),
+  input[type="file"]:disabled::file-selector-button {
+    cursor: not-allowed;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

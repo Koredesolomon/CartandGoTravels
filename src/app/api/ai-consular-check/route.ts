@@ -1,4 +1,5 @@
-import { ACCESS_COOKIE, readToken } from "@/lib/payment";
+import { ACCESS_COOKIE } from "@/lib/payment";
+import { getConsularAccessRef } from "@/lib/consularAccess";
 import { NextRequest, NextResponse } from "next/server";
 
 const MAX_DOCUMENT_CHARS = 12000;
@@ -121,7 +122,7 @@ function normalizeReport(value: unknown) {
 }
 
 export async function POST(request: NextRequest) {
-  const access = readToken(request.cookies.get(ACCESS_COOKIE)?.value, "access");
+  const access = getConsularAccessRef(request.cookies.get(ACCESS_COOKIE)?.value);
   if (!access) {
     return NextResponse.json({ error: "Payment is required or your session has expired." }, { status: 402 });
   }
@@ -138,7 +139,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const clientKey = access.ref;
+  const clientKey = access;
 
   if (isRateLimited(clientKey)) {
     return NextResponse.json(

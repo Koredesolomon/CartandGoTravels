@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createLeadSubmissionPdf } from "@/lib/leadSubmissionPdf";
+
+export const runtime = "nodejs";
 
 const MAX_MESSAGE_LENGTH = 6000;
 
@@ -28,6 +31,8 @@ async function sendLeadEmail({
     );
   }
 
+  const submittedAt = new Date();
+  const pdf = await createLeadSubmissionPdf({ message, email: replyTo, submittedAt });
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -40,7 +45,11 @@ async function sendLeadEmail({
       to: toEmail,
       reply_to: replyTo || undefined,
       subject: "New Cart&Go Travels form request",
-      text: message,
+      text: "A new form request has been received. The complete submission details are attached as a PDF. Reply to this email to contact the sender if a reply address was provided.",
+      attachments: [{
+        filename: `cartandgo-form-request-${submittedAt.toISOString().replace(/[:.]/g, "-")}.pdf`,
+        content: pdf.toString("base64"),
+      }],
     }),
   });
 

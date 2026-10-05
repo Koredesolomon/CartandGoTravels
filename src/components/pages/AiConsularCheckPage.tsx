@@ -4,9 +4,10 @@ import type { ReactNode } from "react";
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
+import { UploadCard } from "@/components/ui/UploadCard";
 import { WhatsAppLeadActions } from "@/components/ui/WhatsAppLeadActions";
 import { worldCountries } from "@/data/countries";
-import { extractDocumentText } from "@/lib/documentText";
+import { extractDocumentText, MAX_TEXT_CHARS } from "@/lib/documentText";
 
 const sampleWeakSop =
   "I want to study in Canada because it is a good country. My uncle will send me money for my fees. I have finished my first degree and I want to do another one in business. I will come back to Nigeria after school if I get a good job here. Thank you for considering my application.";
@@ -394,6 +395,7 @@ export function AiConsularCheckPage({
   const [country, setCountry] = useState("Canada");
   const [visaClass, setVisaClass] = useState<(typeof visaClasses)[number]>("Study Permit");
   const [documentText, setDocumentText] = useState("");
+  const [documentMode, setDocumentMode] = useState<"upload" | "paste">("upload");
   const [uploadedFile, setUploadedFile] = useState("");
   const [showScratch, setShowScratch] = useState(false);
   const [scratchPurpose, setScratchPurpose] = useState("");
@@ -407,10 +409,12 @@ export function AiConsularCheckPage({
   const [cvMode, setCvMode] = useState<EntryMode>("upload");
   const [cvCountry, setCvCountry] = useState("Canada");
   const [cvText, setCvText] = useState("");
+  const [cvFileName, setCvFileName] = useState("");
   const [cvScratch, setCvScratch] = useState({ name: "", target: "", experience: "", education: "" });
   const [cvResult, setCvResult] = useState<string[] | null>(null);
   const [coverMode, setCoverMode] = useState<EntryMode>("upload");
   const [coverText, setCoverText] = useState("");
+  const [coverFileName, setCoverFileName] = useState("");
   const [coverScratch, setCoverScratch] = useState({ name: "", target: "", strengths: "" });
   const [coverResult, setCoverResult] = useState("");
   const [appointment, setAppointment] = useState({
@@ -455,7 +459,13 @@ export function AiConsularCheckPage({
     setAssessmentError("");
 
     if (!trimmedDocument) {
-      setAssessmentError("Paste a document first so the check has something to review.");
+      setAssessmentError("Upload a document or paste its text before running the check.");
+      setAnalysis(null);
+      return;
+    }
+
+    if (trimmedDocument.length > MAX_TEXT_CHARS) {
+      setAssessmentError("Document text is too long. Please keep it under 12,000 characters.");
       setAnalysis(null);
       return;
     }
@@ -512,19 +522,56 @@ export function AiConsularCheckPage({
     setUploadError("");
     setIsReadingFile(true);
     if (target === "document") { setDocumentText(""); setUploadedFile(""); setAnalysis(null); }
-    else if (target === "cv") { setCvText(""); setCvResult(null); }
-    else { setCoverText(""); setCoverResult(""); }
+    else if (target === "cv") { setCvText(""); setCvFileName(""); setCvResult(null); }
+    else { setCoverText(""); setCoverFileName(""); setCoverResult(""); }
     try {
       const text = await extractDocumentText(file);
       if (version !== uploadVersion.current) return;
       if (target === "document") { setDocumentText(text); setUploadedFile(file.name); }
-      else if (target === "cv") setCvText(text);
-      else setCoverText(text);
+      else if (target === "cv") { setCvText(text); setCvFileName(file.name); }
+      else { setCoverText(text); setCoverFileName(file.name); }
     } catch (error) {
       if (version === uploadVersion.current) setUploadError(error instanceof Error ? error.message : "Unable to read that file.");
     } finally {
       if (version === uploadVersion.current) setIsReadingFile(false);
     }
+  }
+
+  function changeDocumentMode(mode: "upload" | "paste") {
+    if (mode === documentMode) return;
+    uploadVersion.current++;
+    setIsReadingFile(false);
+    setUploadError("");
+    setAssessmentError("");
+    setDocumentMode(mode);
+  }
+
+  function changeCvMode(mode: EntryMode) {
+    if (mode === cvMode) return;
+    uploadVersion.current++;
+    setIsReadingFile(false);
+    setUploadError("");
+    setCvResult(null);
+    setCvMode(mode);
+  }
+
+  function changeCoverMode(mode: EntryMode) {
+    if (mode === coverMode) return;
+    uploadVersion.current++;
+    setIsReadingFile(false);
+    setUploadError("");
+    setCoverResult("");
+    setCoverMode(mode);
+  }
+
+  function removeDocument() {
+    uploadVersion.current++;
+    setIsReadingFile(false);
+    setDocumentText("");
+    setUploadedFile("");
+    setAnalysis(null);
+    setUploadError("");
+    setAssessmentError("");
   }
 
   async function startPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -562,6 +609,9 @@ export function AiConsularCheckPage({
       return;
     }
 
+    changeDocumentMode("paste");
+    setUploadedFile("");
+    setAnalysis(null);
     setDocumentText(
       `Statement of Purpose\n\nI am writing to explain the purpose of my intended application. ${scratchPurpose}. This plan is funded as follows: ${scratchFunds}. I confirm the following ties to Nigeria, which I will return to on completion of this trip: ${scratchTies}. I have carefully researched this opportunity and am confident it represents the logical next step in my personal and professional plan.`,
     );
@@ -678,14 +728,17 @@ export function AiConsularCheckPage({
     setCvScratch({ name: "", target: "", experience: "", education: "" });
     setCoverScratch({ name: "", target: "", strengths: "" });
     setDocumentText("");
+    setDocumentMode("upload");
     setUploadedFile("");
     setAnalysis(null);
     setAssessmentError("");
     setRewriteText("");
     setRewriteResult(null);
     setCvText("");
+    setCvFileName("");
     setCvResult(null);
     setCoverText("");
+    setCoverFileName("");
     setCoverResult("");
     setAppointment((current) => ({ ...current, date: "", slot: "" }));
     resetInterview();
@@ -852,44 +905,64 @@ export function AiConsularCheckPage({
                       />
                     </div>
 
-                    <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
-                      Upload your document
-                      <input
-                        className={inputClass}
-                        type="file"
-                        accept=".docx,.pdf,.txt"
-                        onChange={(event) => void processFile(event.target.files?.[0])}
-                        disabled={isReadingFile}
-                      />
-                    </label>
-                    {uploadedFile ? (
-                      <div className="mt-3 inline-flex items-center gap-3 rounded-full border border-[#0098ba] bg-[#e8f6fb] px-4 py-2 text-sm font-bold text-[#07141a]">
-                        {uploadedFile}
+                    <p className="mt-5 text-sm leading-6 text-[#5b6870]">
+                      Upload a document or paste its text. Either option can be used for the pre-assessment.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Document input method">
+                      {([["upload", "Upload document"], ["paste", "Paste text"]] as const).map(([mode, label]) => (
                         <button
+                          key={mode}
                           type="button"
-                          onClick={() => setUploadedFile("")}
-                          className="text-[#5b6870]"
+                          aria-pressed={documentMode === mode}
+                          onClick={() => changeDocumentMode(mode)}
+                          className={`rounded-md border px-4 py-2 text-sm font-bold ${documentMode === mode ? "border-[#07141a] bg-[#07141a] text-white" : "border-[#d7dfe5] bg-[#fbf8f2] text-[#1b1f27]"}`}
                         >
-                          ×
+                          {label}
                         </button>
-                      </div>
+                      ))}
+                    </div>
+
+                    {documentMode === "upload" ? (
+                      <UploadCard
+                        documentName="document"
+                        description="Click the button below to upload your visa document for a readiness review before you apply."
+                        fileName={uploadedFile}
+                        isReading={isReadingFile}
+                        onFileSelect={(file) => void processFile(file)}
+                        onRemove={removeDocument}
+                        helpText="PDF, DOCX or TXT · Up to 10MB and 100 PDF pages. For scanned or password-protected PDFs, paste the text instead."
+                        className="mt-4"
+                      />
                     ) : null}
 
-                    <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
-                      Or paste your document text
-                      <textarea
-                        value={documentText}
-                        onChange={(event) => setDocumentText(event.target.value)}
-                        placeholder="Statement of purpose, sponsor affidavit, financial summary, employment letter..."
-                        className={`${inputClass} min-h-52 resize-y leading-7`}
-                      />
-                    </label>
+                    {documentMode === "paste" || documentText ? (
+                      <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
+                        {documentMode === "paste" ? "Paste your document text" : "Document text ready for review"}
+                        <textarea
+                          value={documentText}
+                          readOnly={documentMode === "upload"}
+                          onChange={(event) => {
+                            setDocumentText(event.target.value);
+                            setUploadedFile("");
+                            setAnalysis(null);
+                            setAssessmentError("");
+                          }}
+                          placeholder="Statement of purpose, sponsor affidavit, financial summary, employment letter..."
+                          className={`${inputClass} min-h-52 resize-y leading-7`}
+                        />
+                      </label>
+                    ) : null}
+                    <p className="mt-2 text-xs text-[#5b6870]">
+                      {documentText.length.toLocaleString()} / {MAX_TEXT_CHARS.toLocaleString()} characters
+                    </p>
 
                     <div className="mt-3 flex flex-wrap gap-3 text-sm font-bold">
                       <button
                         type="button"
                         onClick={() => {
+                          changeDocumentMode("paste");
                           setDocumentText(sampleWeakSop);
+                          setUploadedFile("");
                           setAnalysis(null);
                           setAssessmentError("");
                         }}
@@ -980,51 +1053,68 @@ export function AiConsularCheckPage({
               ) : null}
 
               {activeTool === "cv" ? (
-                <Panel>
-                  <EntryToggle value={cvMode} onChange={setCvMode} labels={["Upload CV", "Paste CV", "Start from Scratch"]} />
-                  <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
-                    Optimise for destination country
-                    <select className={inputClass} value={cvCountry} onChange={(event) => setCvCountry(event.target.value)}>
-                      {worldCountries.map((item) => (
-                        <option key={item}>{item}</option>
-                      ))}
-                    </select>
-                  </label>
+                <div className="space-y-6">
+                  <Panel>
+                    <EntryToggle value={cvMode} onChange={changeCvMode} modes={["upload", "scratch"]} labels={["Upload CV", "Start from Scratch"]} />
+                    <label className="mt-5 block max-w-md text-[12.5px] font-semibold text-[#07141a]">
+                      Optimise for destination country
+                      <select className={inputClass} value={cvCountry} onChange={(event) => { setCvCountry(event.target.value); setCvResult(null); }}>
+                        {worldCountries.map((item) => (
+                          <option key={item}>{item}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </Panel>
                   {cvMode === "upload" ? (
-                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={(event) => void processFile(event.target.files?.[0], "cv")} disabled={isReadingFile} />
-                  ) : null}
-                  {cvMode === "paste" ? (
-                    <textarea value={cvText} onChange={(event) => setCvText(event.target.value)} className={`${inputClass} min-h-44`} placeholder="Paste your CV here..." />
+                    <UploadCard
+                      documentName="CV"
+                      description="Click the button below to upload your CV or resume for a review tailored to your destination."
+                      fileName={cvFileName}
+                      isReading={isReadingFile}
+                      onFileSelect={(file) => void processFile(file, "cv")}
+                      onRemove={() => { setCvText(""); setCvFileName(""); setCvResult(null); setUploadError(""); }}
+                    />
                   ) : null}
                   {cvMode === "scratch" ? (
-                    <div className="mt-4 grid gap-4">
-                      <ScratchInput label="Full name" value={cvScratch.name} onChange={(value) => setCvScratch((current) => ({ ...current, name: value }))} />
-                      <ScratchInput label="Target role / programme" value={cvScratch.target} onChange={(value) => setCvScratch((current) => ({ ...current, target: value }))} />
-                      <ScratchArea label="Work experience" value={cvScratch.experience} onChange={(value) => setCvScratch((current) => ({ ...current, experience: value }))} />
-                      <ScratchArea label="Education and certifications" value={cvScratch.education} onChange={(value) => setCvScratch((current) => ({ ...current, education: value }))} />
-                    </div>
+                    <Panel>
+                      <div className="grid gap-4">
+                        <ScratchInput label="Full name" value={cvScratch.name} onChange={(value) => setCvScratch((current) => ({ ...current, name: value }))} />
+                        <ScratchInput label="Target role / programme" value={cvScratch.target} onChange={(value) => setCvScratch((current) => ({ ...current, target: value }))} />
+                        <ScratchArea label="Work experience" value={cvScratch.experience} onChange={(value) => setCvScratch((current) => ({ ...current, experience: value }))} />
+                        <ScratchArea label="Education and certifications" value={cvScratch.education} onChange={(value) => setCvScratch((current) => ({ ...current, education: value }))} />
+                      </div>
+                    </Panel>
                   ) : null}
-                  <button type="button" onClick={runCvOptimize} disabled={isReadingFile} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
-                    Optimise for ATS
-                  </button>
+                  <div className="flex justify-center">
+                    <button type="button" onClick={runCvOptimize} disabled={isReadingFile || (cvMode !== "scratch" && !cvText.trim())} className="rounded-lg bg-[#07141a] px-6 py-3 text-sm font-black text-white transition hover:bg-[#07324a] disabled:cursor-not-allowed disabled:opacity-40">
+                      Optimise for ATS
+                    </button>
+                  </div>
                   {cvResult ? (
-                    <ReportSection title={`ATS optimisation - ${cvCountry}`}>
-                      {cvResult.map((item) => (
-                        <FlagCard key={item} type="excellent" title="Applied" body={item} />
-                      ))}
-                    </ReportSection>
+                    <Panel>
+                      <ReportSection title={`ATS optimisation - ${cvCountry}`}>
+                        {cvResult.map((item) => (
+                          <FlagCard key={item} type="excellent" title="Applied" body={item} />
+                        ))}
+                      </ReportSection>
+                    </Panel>
                   ) : null}
-                </Panel>
+                </div>
               ) : null}
 
               {activeTool === "cover" ? (
                 <Panel>
-                  <EntryToggle value={coverMode} onChange={setCoverMode} labels={["Upload Draft", "Paste Draft", "Start from Scratch"]} />
+                  <EntryToggle value={coverMode} onChange={changeCoverMode} modes={["upload", "scratch"]} labels={["Upload Draft", "Start from Scratch"]} />
                   {coverMode === "upload" ? (
-                    <input className={inputClass} type="file" accept=".docx,.pdf,.txt" onChange={(event) => void processFile(event.target.files?.[0], "cover")} disabled={isReadingFile} />
-                  ) : null}
-                  {coverMode === "paste" ? (
-                    <textarea value={coverText} onChange={(event) => setCoverText(event.target.value)} className={`${inputClass} min-h-44`} placeholder="Paste your draft cover letter here..." />
+                    <UploadCard
+                      documentName="cover letter"
+                      description="Click the button below to upload your draft cover letter and prepare it for your application."
+                      fileName={coverFileName}
+                      isReading={isReadingFile}
+                      onFileSelect={(file) => void processFile(file, "cover")}
+                      onRemove={() => { setCoverText(""); setCoverFileName(""); setCoverResult(""); setUploadError(""); }}
+                      className="mt-4"
+                    />
                   ) : null}
                   {coverMode === "scratch" ? (
                     <div className="mt-4 grid gap-4">
@@ -1528,13 +1618,13 @@ function EntryToggle({
   value,
   onChange,
   labels,
+  modes = ["upload", "paste", "scratch"],
 }: {
   value: EntryMode;
   onChange: (mode: EntryMode) => void;
-  labels: readonly [string, string, string];
+  labels: readonly string[];
+  modes?: readonly EntryMode[];
 }) {
-  const modes: EntryMode[] = ["upload", "paste", "scratch"];
-
   return (
     <div className="flex flex-wrap gap-2">
       {modes.map((mode, index) => (
