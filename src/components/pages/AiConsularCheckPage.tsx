@@ -530,6 +530,12 @@ export function AiConsularCheckPage({
   async function startPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (checkoutPending.current) return;
+    const paymentTab = window.open("about:blank", "_blank");
+    if (!paymentTab) {
+      setPaymentError("Allow pop-ups for this site, then try payment again.");
+      return;
+    }
+    paymentTab.opener = null;
     checkoutPending.current = true;
     setIsStartingPayment(true);
     setPaymentError("");
@@ -539,9 +545,12 @@ export function AiConsularCheckPage({
       });
       const data = await response.json();
       if (!response.ok || !data.url) throw new Error(data.error ?? "Unable to start payment.");
-      window.location.assign(data.url);
+      if (paymentTab.closed) throw new Error("The payment tab was closed. Please try again.");
+      paymentTab.location.replace(data.url);
     } catch (error) {
+      paymentTab.close();
       setPaymentError(error instanceof Error ? error.message : "Unable to start payment.");
+    } finally {
       checkoutPending.current = false;
       setIsStartingPayment(false);
     }
