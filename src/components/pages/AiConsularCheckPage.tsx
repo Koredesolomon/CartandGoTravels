@@ -7,6 +7,7 @@ import { Icon } from "@/components/ui/Icon";
 import { UploadCard } from "@/components/ui/UploadCard";
 import { WhatsAppLeadActions } from "@/components/ui/WhatsAppLeadActions";
 import { worldCountries } from "@/data/countries";
+import { ItineraryPlanner } from "@/components/itinerary/ItineraryPlanner";
 import { extractDocumentText, MAX_TEXT_CHARS } from "@/lib/documentText";
 
 const sampleWeakSop =
@@ -348,20 +349,6 @@ function normalizeApiReport(report: ApiReport): Analysis {
   };
 }
 
-function formatDate(date: string, offset: number) {
-  if (!date) {
-    return `Day ${offset + 1}`;
-  }
-
-  const next = new Date(date);
-  next.setDate(next.getDate() + offset);
-  return next.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function hasPaymentFailure() {
   if (typeof window === "undefined") {
     return false;
@@ -423,12 +410,7 @@ export function AiConsularCheckPage({
     date: "",
     slot: "",
   });
-  const [itinerary, setItinerary] = useState({
-    destination: "Qatar",
-    days: "5",
-    start: "",
-    interests: ["Culture & history", "Food"],
-  });
+  const [itinerarySession, setItinerarySession] = useState(0);
   const [interviewCategory, setInterviewCategory] = useState<InterviewCategory>("Study");
   const [pathway, setPathway] = useState("Canada Study Permit");
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -720,6 +702,7 @@ export function AiConsularCheckPage({
 
   function wipeSessionData() {
     uploadVersion.current++;
+    setItinerarySession((current) => current + 1);
     setIsReadingFile(false);
     setUploadError("");
     setScratchPurpose("");
@@ -1174,66 +1157,9 @@ export function AiConsularCheckPage({
                 </Panel>
               ) : null}
 
-              {activeTool === "itinerary" ? (
-                <Panel>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <SelectField label="Destination" value={itinerary.destination} onChange={(value) => setItinerary((current) => ({ ...current, destination: value }))} options={worldCountries} />
-                    <label className="block text-[12.5px] font-semibold text-[#07141a]">
-                      Number of days
-                      <input
-                        className={inputClass}
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={itinerary.days}
-                        onChange={(event) =>
-                          setItinerary((current) => ({
-                            ...current,
-                            days: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
-                    Start date
-                    <input className={inputClass} type="date" value={itinerary.start} onChange={(event) => setItinerary((current) => ({ ...current, start: event.target.value }))} />
-                  </label>
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    {["Culture & history", "Food", "Adventure", "Relaxation", "Nightlife"].map((interest) => (
-                      <label key={interest} className="flex cursor-pointer items-center gap-2 rounded-full border border-[#d7dfe5] bg-[#fbf8f2] px-4 py-2 text-sm font-bold text-[#1b1f27]">
-                        <input
-                          type="checkbox"
-                          checked={itinerary.interests.includes(interest)}
-                          onChange={(event) =>
-                            setItinerary((current) => ({
-                              ...current,
-                              interests: event.target.checked
-                                ? [...current.interests, interest]
-                                : current.interests.filter((item) => item !== interest),
-                            }))
-                          }
-                        />
-                        {interest}
-                      </label>
-                    ))}
-                  </div>
-                  <ReportSection title={`${Math.max(1, Number(itinerary.days) || 1)}-day itinerary - ${itinerary.destination}`}>
-                    {Array.from({ length: Math.max(1, Number(itinerary.days) || 1) }).map((_, index) => (
-                      <div key={index} className="rounded-md border border-[#d7dfe5] bg-white p-4">
-                        <h3 className="text-sm font-black text-[#f0a42f]">
-                          Day {index + 1} - {formatDate(itinerary.start, index)}
-                        </h3>
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-[#5b6870]">
-                          <li>Morning: guided city or heritage experience</li>
-                          <li>Afternoon: food, culture or relaxation activity based on your interests</li>
-                          <li>Evening: dinner, downtime or optional evening activity</li>
-                        </ul>
-                      </div>
-                    ))}
-                  </ReportSection>
-                </Panel>
-              ) : null}
+              <div className={activeTool === "itinerary" ? "" : "hidden"}>
+                <ItineraryPlanner key={itinerarySession} />
+              </div>
 
               {activeTool === "interview" ? (
                 <div className="grid gap-8 lg:grid-cols-[.8fr_1.2fr]">

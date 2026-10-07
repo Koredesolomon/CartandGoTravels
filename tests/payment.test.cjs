@@ -55,13 +55,14 @@ test('AI and verification APIs deny unpaid and legacy-cookie requests before ups
   } finally { global.fetch = originalFetch; }
 });
 
-test('consular requires a paid session in every environment even with the retired bypass flag', async () => {
-  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT };
+test('consular requires a paid session in every environment even with retired bypass flags', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT, CONSULAR_LOCAL_PREVIEW: process.env.CONSULAR_LOCAL_PREVIEW };
   const { getConsularAccessRef } = load('src/lib/consularAccess.ts');
   global.fetch = async () => { throw new Error('Unpaid requests must not call upstream'); };
   const request = () => new NextRequest('http://localhost:3000/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country: 'Canada', visaClass: 'Study Permit', documentText: 'Synthetic application text' }) });
   try {
     process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
+    process.env.CONSULAR_LOCAL_PREVIEW = 'true';
     for (const mode of ['development', 'production', 'test']) {
       process.env.NODE_ENV = mode;
       assert.equal(getConsularAccessRef(undefined), null);

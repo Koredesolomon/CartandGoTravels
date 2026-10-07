@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/lead-submissions": ["./src/assets/fonts/*.ttf"],
+    "/api/itinerary-pdf": ["./src/assets/fonts/*.ttf"],
   },
   async headers() {
     return [
