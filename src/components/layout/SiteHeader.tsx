@@ -12,16 +12,16 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-50 border-b border-[#d7dfe5]/70 bg-white/90 backdrop-blur-xl">
       <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-5 lg:px-8">
-        <Link href="/" className="flex items-center gap-3" onClick={() => setIsMenuOpen(false)}>
+        <Link href="/" className="flex items-center gap-2 md:gap-3" onClick={() => setIsMenuOpen(false)}>
           <Image
             src="/assets/logo.jpg"
             alt="CartandGo Travels logo"
             width={44}
             height={44}
-            className="h-11 w-11 rounded-md bg-black object-cover ring-1 ring-black/10"
+            className="h-8 w-8 rounded-md bg-black object-cover ring-1 ring-black/10 md:h-11 md:w-11"
             priority
           />
-          <span className="text-xl font-black tracking-tight text-[#07141a]">
+          <span className="text-base font-black tracking-tight text-[#07141a] md:text-xl">
             Cart<span className="text-[#0098ba]">&amp;</span>Go{" "}
             <span className="text-[#f0a42f]">Travels</span>
           </span>

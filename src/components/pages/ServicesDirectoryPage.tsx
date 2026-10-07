@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { TravelBookingForm } from "@/components/booking/TravelBookingForm";
 import { FormSubmissionDialog } from "@/components/ui/FormSubmissionDialog";
 import { worldCountries } from "@/data/countries";
 import { useLeadSubmission } from "@/hooks/useLeadSubmission";
@@ -70,20 +71,13 @@ const serviceDirectory = [
   },
   {
     id: "flights",
-    name: "Flights",
-    desc: "Flight search and itinerary support for local, international, family, group and visa-related trips.",
+    name: "Flights & Hotels",
+    desc: "Flight search, itinerary support and hotel reservations for local, international, family, group and visa-related trips, matched to your location, budget, travel purpose and comfort needs.",
     reqs: [
       "Flexible-date flight options and fare comparison",
       "One-way, return and multi-city itinerary support",
       "Group, family and business-trip reservation support",
       "Trip changes, booking notes and airline coordination",
-    ],
-  },
-  {
-    id: "hotel-booking",
-    name: "Hotel Booking",
-    desc: "Hotel shortlist and reservation support matched to your location, budget, travel purpose and comfort needs.",
-    reqs: [
       "Hotel shortlist matched to city, neighbourhood and budget",
       "Business, family, student and leisure stay options",
       "Room preference, guest count and check-in coordination",
@@ -215,67 +209,6 @@ const serviceForms = [
         options: ["Schengen visa cover", "Study abroad cover", "Family trip", "Business trip"],
       },
       { label: "Number of Travelers", type: "number", placeholder: "e.g. 2" },
-    ],
-  },
-  {
-    serviceId: "flights",
-    id: "flights-form",
-    title: "Flight Request",
-    submit: "Request Flight Quote",
-    fields: [
-      { label: "Full Name", placeholder: "Your full name" },
-      { label: "Email Address", type: "email", placeholder: "you@email.com" },
-      { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
-      {
-        label: "Trip Type",
-        type: "select",
-        options: ["One-way", "Return", "Multi-city", "Group booking"],
-      },
-      { label: "Destination", placeholder: "e.g. London" },
-      { label: "Departure City", placeholder: "e.g. Lagos" },
-      { label: "Departure Date", type: "date" },
-      { label: "Return Date", type: "date", required: false },
-      {
-        label: "Travelers",
-        type: "number",
-        placeholder: "Number of travelers",
-      },
-      {
-        label: "Preferences",
-        type: "textarea",
-        placeholder: "Tell us your airline, budget, baggage or timing preference",
-        required: false,
-      },
-    ],
-  },
-  {
-    serviceId: "hotel-booking",
-    id: "hotel-booking-form",
-    title: "Hotel Booking Request",
-    submit: "Request Hotel Quote",
-    fields: [
-      { label: "Full Name", placeholder: "Your full name" },
-      { label: "Email Address", type: "email", placeholder: "you@email.com" },
-      { label: "Phone / WhatsApp", type: "tel", placeholder: "+234 ..." },
-      { label: "Destination", placeholder: "e.g. Istanbul" },
-      { label: "Check-in Date", type: "date" },
-      { label: "Check-out Date", type: "date" },
-      {
-        label: "Guests",
-        type: "number",
-        placeholder: "Number of guests",
-      },
-      {
-        label: "Hotel Style",
-        type: "select",
-        options: ["Budget", "Boutique", "Business hotel", "Resort", "5-star"],
-      },
-      {
-        label: "Preferences",
-        type: "textarea",
-        placeholder: "Tell us your room type, location, budget or special request",
-        required: false,
-      },
     ],
   },
   {
@@ -435,12 +368,14 @@ export function ServicesDirectoryPage({
 }: ServicesDirectoryPageProps) {
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
   const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
+  const serviceId = selectedServiceId === "hotel-booking" ? "flights" : selectedServiceId;
   const selectedService =
-    serviceDirectory.find((service) => service.id === selectedServiceId) ??
+    serviceDirectory.find((service) => service.id === serviceId) ??
     serviceDirectory[0];
   const selectedForm =
     serviceForms.find((form) => form.serviceId === selectedService.id) ??
     serviceForms[0];
+  const isBookingService = selectedService.id === "flights";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -490,6 +425,7 @@ export function ServicesDirectoryPage({
                 </span>
               </summary>
               <div className="border-t border-dashed border-[#e2dacb] px-5 pb-6 pt-4">
+                {service.id === "flights" ? <span id="hotel-booking" className="block scroll-mt-28" aria-hidden="true" /> : null}
                 <p className="max-w-3xl text-[14.5px] leading-7 text-[#5a5f6b]">
                   {service.desc}
                 </p>
@@ -522,40 +458,44 @@ export function ServicesDirectoryPage({
             </p>
           </div>
 
-          <form
-            onSubmit={handleSubmit}
-            id={selectedForm.id}
-            className="max-w-4xl rounded-md border border-[#e2dacb] bg-white p-6"
-          >
-            <h3 className="font-serif text-2xl font-semibold text-[#0f1e3d]">
-              {selectedForm.title}
-            </h3>
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              {selectedForm.fields.map((field) => (
-                <ServiceField
-                  key={field.label}
-                  formId={selectedForm.id}
-                  field={field}
-                />
-              ))}
-            </div>
-            <button
-              type="submit"
-                disabled={isSubmitting}
-                aria-busy={isSubmitting}
-              className="mt-6 inline-flex rounded bg-[#c68a2e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#b87d22]"
+          {isBookingService ? (
+            <TravelBookingForm key={selectedServiceId} initialTab={selectedServiceId === "hotel-booking" ? "hotel" : "flight"} />
+          ) : (
+            <form
+              onSubmit={handleSubmit}
+              id={selectedForm.id}
+              className="max-w-4xl rounded-md border border-[#e2dacb] bg-white p-6"
             >
-              {selectedForm.submit}
-            </button>
-            {submissionError ? (
-              <p role="alert" className="mt-3 text-sm text-red-700">
-                {submissionError}
-              </p>
-            ) : null}
-            {isSubmitting ? (
-              <p role="status" className="mt-3 text-sm">Sending your request…</p>
-            ) : null}
-          </form>
+              <h3 className="font-serif text-2xl font-semibold text-[#0f1e3d]">
+                {selectedForm.title}
+              </h3>
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                {selectedForm.fields.map((field) => (
+                  <ServiceField
+                    key={field.label}
+                    formId={selectedForm.id}
+                    field={field}
+                  />
+                ))}
+              </div>
+              <button
+                type="submit"
+                  disabled={isSubmitting}
+                  aria-busy={isSubmitting}
+                className="mt-6 inline-flex rounded bg-[#c68a2e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#b87d22]"
+              >
+                {selectedForm.submit}
+              </button>
+              {submissionError ? (
+                <p role="alert" className="mt-3 text-sm text-red-700">
+                  {submissionError}
+                </p>
+              ) : null}
+              {isSubmitting ? (
+                <p role="status" className="mt-3 text-sm">Sending your request…</p>
+              ) : null}
+            </form>
+          )}
         </div>
 
         <div className="mt-10">

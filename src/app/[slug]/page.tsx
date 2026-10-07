@@ -3,6 +3,7 @@ import { getConsularAccessRef } from "@/lib/consularAccess";
 import { AboutPage } from "@/components/pages/AboutPage";
 import { AiConsularCheckPage } from "@/components/pages/AiConsularCheckPage";
 import { ContactPage } from "@/components/pages/ContactPage";
+import { FlightBookingPage } from "@/components/pages/FlightBookingPage";
 import { CoursesPage } from "@/components/pages/CoursesPage";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
@@ -51,7 +52,7 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
   }
 
   if (slug === "flights") {
-    return <ServicesDirectoryPage selectedServiceId="flights" />;
+    return <FlightBookingPage />;
   }
 
   if (slug === "visa") {

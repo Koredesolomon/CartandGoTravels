@@ -22,7 +22,7 @@ export function ServicesGrid() {
               href={offer.href}
               target="_blank"
               rel="noopener noreferrer"
-              className="group overflow-hidden rounded-lg border border-[#d7dfe5] bg-white shadow-[0_20px_70px_-45px_rgba(0,29,47,.55)] transition hover:-translate-y-1"
+              className="group overflow-hidden rounded-lg border border-[#d7dfe5] bg-white shadow-[0_4px_12px_-6px_rgba(0,29,47,.12)] transition hover:-translate-y-1"
             >
               <Image
                 src={offer.image}

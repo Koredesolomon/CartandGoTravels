@@ -125,24 +125,27 @@ export function HeroServiceCarousel() {
             <h1 className="text-[40px] font-black leading-[1.08]">
               {activeSlide.title}
             </h1>
-            <p className="mt-5 w-full text-lg leading-8 text-white/80 lg:w-[60%]">
+            <p className="mt-5 w-full text-[15px] leading-8 text-white/80 md:text-lg lg:w-[60%]">
               {activeSlide.text}
             </p>
 
-            <div className="mt-8 flex flex-wrap gap-4">
+            <div className="mt-8 grid grid-cols-2 gap-2 sm:flex sm:gap-4">
               <Link
                 href={activeSlide.href}
-                className="inline-flex items-center gap-2 rounded-full bg-[#f0a42f] px-6 py-3 text-sm font-black text-[#07141a] transition hover:bg-[#ffb347]"
+                className="inline-flex h-12 min-w-0 items-center justify-center gap-1 rounded-full bg-[#f0a42f] px-2 text-center text-sm font-semibold leading-tight text-[#07141a] transition hover:bg-[#ffb347] sm:h-auto sm:gap-2 sm:px-6 sm:py-3 sm:font-black"
               >
-                Explore {activeSlide.title}
-                <Icon name="Arrow" className="h-4 w-4" />
+                <span className="sm:whitespace-nowrap">
+                  <span className="sr-only sm:not-sr-only">Explore </span>
+                  {activeSlide.title}
+                </span>
+                <Icon name="Arrow" className="h-3 w-3 shrink-0 sm:h-4 sm:w-4" />
               </Link>
               <Link
                 href="/contact"
-                className="inline-flex items-center gap-2 rounded-full border border-white/30 bg-white/10 px-6 py-3 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
+                className="inline-flex h-12 min-w-0 items-center justify-center gap-1 rounded-full border border-white/30 bg-white/10 px-2 text-center text-sm font-semibold leading-tight text-white backdrop-blur transition hover:bg-white/20 sm:h-auto sm:gap-2 sm:px-6 sm:py-3"
               >
-                Book Consultation
-                <Icon name="Arrow" className="h-4 w-4" />
+                <span className="sm:whitespace-nowrap">Book Consultation</span>
+                <Icon name="Arrow" className="h-3 w-3 shrink-0 sm:h-4 sm:w-4" />
               </Link>
             </div>
           </div>

@@ -756,7 +756,7 @@ export function AiConsularCheckPage({
             <p className="mt-8 text-xs font-black uppercase text-[#04f1f1]">
               AI Consular+
             </p>
-            <h1 className="mt-4 font-serif text-5xl leading-[1.04] md:text-7xl">
+            <h1 className="mt-4 font-serif text-[45px] leading-[1.04] md:text-[60px]">
               Your full document and travel-prep suite.
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-white/78">

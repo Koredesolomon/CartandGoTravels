@@ -23,12 +23,6 @@ const services = [
   ["Study Pathways", "Scholarships, courses, student loans and football mobility support.", "Cap"],
 ] as const;
 
-const linkGroups = [
-  ["Our Destinations", ["Canada", "UK", "France", "Iceland"]],
-  ["Our Activities", ["Northern Lights", "Cruising & sailing", "Multi-activities", "Study mobility"]],
-  ["Travel Guides", ["Visa refusal guide", "POF checklist", "Student visa guide", "Flight booking tips"]],
-] as const;
-
 export function AboutPage() {
   const [isThankYouOpen, setIsThankYouOpen] = useState(false);
   const { sendLead, isSubmitting, submissionError } = useLeadSubmission();
@@ -64,10 +58,10 @@ export function AboutPage() {
         <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-5 py-20 md:py-28 lg:grid-cols-[.95fr_1.05fr] lg:px-8">
           <div>
             <p className="text-xs font-black uppercase text-[#04f1f1]">About CartandGo</p>
-            <h1 className="mt-4 text-5xl font-black leading-[1.03] md:text-7xl">
+            <h1 className="mt-4 text-[35px] font-black leading-[1.03] md:text-[50px]">
               Building a clearer path for people ready to move.
             </h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-white/80">
+            <p className="mt-6 max-w-2xl text-[15px] leading-8 text-white/80 md:text-lg">
               CartandGo Travels is a visa, travel and study-abroad desk focused on
               transparency, careful document checks and practical support before
               applicants spend money on submissions, bookings or embassy fees.
@@ -119,10 +113,10 @@ export function AboutPage() {
         <div className="mx-auto grid max-w-7xl gap-10 px-5 py-20 lg:grid-cols-[.8fr_1.2fr] lg:px-8">
           <div>
             <p className="text-xs font-black uppercase text-[#0098ba]">Our story</p>
-            <h2 className="mt-3 text-4xl font-black tracking-tight text-[#07141a] md:text-5xl">
+            <h2 className="mt-3 text-[30px] font-black tracking-tight text-[#07141a] md:text-5xl">
               We combine travel booking with serious application guidance.
             </h2>
-            <p className="mt-5 leading-8 text-[#5b6870]">
+            <p className="mt-5 text-[15px] leading-8 text-[#5b6870] md:text-base">
               The brand exists for clients who need more than a ticket or a form.
               Many travelers need visa clarity, document review, school or work
               direction, proof-of-funds planning and trustworthy booking support in
@@ -148,8 +142,8 @@ export function AboutPage() {
       </section>
 
       <section className="bg-[#0098ba] px-5 py-20 lg:px-8">
-        <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[.92fr_1.08fr] lg:items-start">
-          <div className="rounded-lg bg-[#04f1f1] p-8 text-[#07141a]">
+        <div className="mx-auto max-w-7xl">
+          <div className="mx-auto w-full rounded-lg bg-[#04f1f1] p-8 text-[#07141a] md:w-[60%]">
             <p className="text-xs font-black uppercase">Subscribe Newsletter</p>
             <h2 className="mt-3 text-4xl font-black leading-tight">
               The Travel desk in your inbox.
@@ -188,37 +182,6 @@ export function AboutPage() {
           </form>
           </div>
 
-          <div className="grid gap-5 sm:grid-cols-3">
-            {linkGroups.map(([title, links]) => (
-              <div key={title} className="rounded-lg bg-white/10 p-6 text-[#07141a]">
-                <h3 className="text-lg font-black">{title}</h3>
-                <ul className="mt-5 space-y-3 text-sm">
-                  {links.map((item) => (
-                    <li key={item} className="font-medium">{item}</li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            <div className="rounded-lg bg-[#001ee8] p-6 text-white sm:col-span-3">
-              <div className="grid gap-4 md:grid-cols-3">
-                <div>
-                  <h3 className="font-black">About Us</h3>
-                  <p className="mt-2 text-sm text-white/75">Our Story</p>
-                  <p className="mt-1 text-sm text-white/75">Work with us</p>
-                </div>
-                <div>
-                  <h3 className="font-black">Contact Us</h3>
-                  <p className="mt-2 text-sm text-white/75">visaofficer@cartandgotravels.com</p>
-                  <p className="mt-1 text-sm text-white/75">Lagos, Canada, Lisbon</p>
-                </div>
-                <div>
-                  <h3 className="font-black">Call or WhatsApp</h3>
-                  <p className="mt-2 text-sm text-white/75">+234 807 323 1272</p>
-                  <p className="mt-1 text-sm text-white/75">+1 347 420 0238</p>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
       {isThankYouOpen ? (
