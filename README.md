@@ -18,7 +18,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Site typography uses `next/font/local` with bundled Poppins, Geist Mono, Inter and Fraunces files in `public/fonts/web/`. Production builds do not download Google Fonts. Include that directory and its font licences when committing/deploying; font sources are listed in its README. The separate Noto Sans files remain used by PDF exports.
 
 ## Learn More
 
