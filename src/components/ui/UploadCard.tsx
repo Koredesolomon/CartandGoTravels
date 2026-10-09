@@ -8,10 +8,14 @@ type UploadCardProps = {
   description: string;
   fileName: string;
   isReading: boolean;
+  error?: string;
+  readingMessage?: string;
   onFileSelect: (file: File) => void;
   onRemove: () => void;
   helpText?: string;
   className?: string;
+  multiple?: boolean;
+  onFilesSelect?: (files: File[]) => void;
 };
 
 export function UploadCard({
@@ -19,15 +23,27 @@ export function UploadCard({
   description,
   fileName,
   isReading,
+  error,
+  readingMessage,
   onFileSelect,
   onRemove,
   helpText = "PDF, DOCX or TXT · Up to 10MB",
   className = "",
+  multiple = false,
+  onFilesSelect,
 }: UploadCardProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   return (
-    <div className={`mx-auto w-full max-w-4xl rounded-2xl border border-[#d7dfe5] bg-white px-5 py-8 text-center sm:px-8 sm:py-10 ${className}`}>
+    <div className={`mx-auto w-full max-w-4xl rounded-2xl border border-[#d7dfe5] bg-white px-5 py-8 text-center sm:px-8 sm:py-10 ${className}`}
+      onDragOver={event => event.preventDefault()}
+      onDrop={event => {
+        event.preventDefault();
+        if (isReading) return;
+        const files = Array.from(event.dataTransfer.files);
+        if (onFilesSelect && multiple) onFilesSelect(files);
+        else if (files[0]) onFileSelect(files[0]);
+      }}>
       <p className="mx-auto max-w-2xl text-base leading-7 text-[#5b6870] sm:text-lg sm:leading-8">
         {description}
       </p>
@@ -35,13 +51,15 @@ export function UploadCard({
         ref={fileInput}
         type="file"
         accept=".docx,.pdf,.txt"
+        multiple={multiple}
         aria-label={`Choose ${documentName} file`}
         tabIndex={-1}
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
-          if (file) onFileSelect(file);
+          if (onFilesSelect && multiple) onFilesSelect(files);
+          else if (files[0]) onFileSelect(files[0]);
         }}
         disabled={isReading}
       />
@@ -52,11 +70,16 @@ export function UploadCard({
         className="mt-6 inline-flex min-h-12 w-full max-w-xs items-center justify-center gap-3 rounded-lg bg-[#f0a42f] px-5 py-3 text-base font-black text-[#07141a] transition hover:bg-[#ffb347] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#0098ba] disabled:cursor-wait disabled:opacity-60"
       >
         <Icon name="Upload" className="h-5 w-5 sm:h-6 sm:w-6" />
-        {isReading ? `Reading your ${documentName}…` : fileName ? `Replace your ${documentName}` : `Upload your ${documentName}`}
+        {isReading ? readingMessage || `Reading your ${documentName}…` : fileName ? `Replace your ${documentName}` : `Upload your ${documentName}`}
       </button>
       <p className="mt-4 text-xs leading-5 text-[#5b6870] sm:text-sm">
         {helpText}
       </p>
+      {error ? (
+        <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-left text-sm leading-6 text-red-800">
+          {error}
+        </p>
+      ) : null}
       {fileName ? (
         <div className="mx-auto mt-6 flex max-w-xl items-center justify-center gap-3 rounded-xl bg-[#e8f6fb] px-4 py-3 text-sm font-semibold text-[#07324a]" role="status">
           <Icon name="Check" className="h-5 w-5 shrink-0 text-[#0098ba]" />

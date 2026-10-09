@@ -1,17 +1,22 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
 import { UploadCard } from "@/components/ui/UploadCard";
-import { WhatsAppLeadActions } from "@/components/ui/WhatsAppLeadActions";
 import { worldCountries } from "@/data/countries";
 import { ItineraryPlanner } from "@/components/itinerary/ItineraryPlanner";
-import { extractDocumentText, MAX_TEXT_CHARS } from "@/lib/documentText";
-
-const sampleWeakSop =
-  "I want to study in Canada because it is a good country. My uncle will send me money for my fees. I have finished my first degree and I want to do another one in business. I will come back to Nigeria after school if I get a good job here. Thank you for considering my application.";
+import { extractDocumentText } from "@/lib/documentText";
+import { AssessmentAccessError, readAssessmentFiles, validateAssessmentFiles } from "@/lib/assessmentFiles";
+import { MAX_ASSESSMENT_CHARS, type ConsularReport } from "@/lib/consularReview";
+import { AssessmentReport } from "@/components/consular/AssessmentReport";
+import { DocumentPdfDownload } from "@/components/consular/DocumentPdfDownload";
+import { CvTemplatePicker } from "@/components/consular/CvTemplatePicker";
+import { CvPdfPreview } from "@/components/consular/CvPdfPreview";
+import type { CvTemplateId } from "@/lib/cvTemplates";
+import { CvScratchBuilder } from "@/components/consular/CvScratchBuilder";
+import { cvCountryProfile, emptyCvBuilder, type CvBuilderData, type CvDraft } from "@/lib/cvBuilder";
 
 const visaClasses = [
   "Study Permit",
@@ -32,6 +37,12 @@ const toolTabs = [
 type ActiveTool = (typeof toolTabs)[number][0];
 type EntryMode = "upload" | "paste" | "scratch";
 type InterviewQuestion = readonly [string, string];
+
+const appointmentCentres = {
+  "Biometrics Enrolment": ["Lagos(VFS Global)", "Abuja(VFS global)", "BLS", "TLS"],
+  "Medical Examination": ["Lagos(QLife)", "Abuja(QLife)", "IOM(Lagos)", "IOM(Abuja)", "IOM(Benin)", "St Nicholas Hospital"],
+} as const;
+type AppointmentType = keyof typeof appointmentCentres;
 
 const interviewSets = {
   Study: {
@@ -111,17 +122,6 @@ const interviewSets = {
   },
 } as const;
 
-const atsRules: Record<string, string> = {
-  Canada: "no photo, no age or marital status, reverse-chronological order, Canadian spelling, quantified achievements",
-  "United Kingdom": "no photo, two pages max, reverse-chronological order, right-to-work line, UK date format",
-  Germany: "tabular format acceptable, language proficiency levels, concise profile, locally expected CV conventions",
-  Ireland: "no photo, reverse-chronological order, EU date format, eligibility-to-work status",
-  Australia: "no photo, two to three pages acceptable, career summary, key skills block",
-  "UAE / Gulf": "photo often expected, nationality, visa status, passport validity, concise format",
-};
-const defaultAtsRule =
-  "reverse-chronological order, no photo unless locally customary, concise one to two pages, and locally expected formatting for the destination";
-
 type InterviewCategory = keyof typeof interviewSets;
 
 type Flag = {
@@ -130,7 +130,7 @@ type Flag = {
   body: string;
 };
 
-type Analysis = {
+type LocalRewriteAnalysis = {
   score: number;
   status: {
     label: string;
@@ -147,19 +147,6 @@ type Analysis = {
   source?: "ai" | "local";
 };
 
-type ApiReport = {
-  score: number;
-  statusLabel: string;
-  completeness: number;
-  clarity: number;
-  ties: number;
-  flags: Flag[];
-  roadmap: string[];
-  showPaySmallSmall: boolean;
-  summary: string;
-  disclaimer: string;
-};
-
 const inputClass =
   "mt-1.5 w-full rounded-md border border-[#d7dfe5] bg-[#fbf8f2] px-3 py-2.5 text-[14.5px] text-[#1b1f27] outline-none transition focus:border-[#0098ba] focus:ring-2 focus:ring-[#0098ba]/20";
 
@@ -167,7 +154,7 @@ function countHits(text: string, keywords: readonly string[]) {
   return keywords.filter((keyword) => text.includes(keyword)).length;
 }
 
-function analyzeDocument(text: string): Analysis & { fundsHits: number } {
+function analyzeDocument(text: string): LocalRewriteAnalysis & { fundsHits: number } {
   const lower = text.toLowerCase();
   const words = text.trim().split(/\s+/).filter(Boolean);
   const wordCount = words.length;
@@ -318,37 +305,6 @@ function flagClass(type: Flag["type"]) {
   return "border-[#f00000] bg-[#fff0f0]";
 }
 
-function statusClass(label: string, score: number) {
-  if (label === "Excellent to apply" || score >= 80) {
-    return "bg-[#dff4e9] text-[#1e7a4c]";
-  }
-
-  if (label === "Good profile" || score >= 50) {
-    return "bg-[#fdf2da] text-[#93670f]";
-  }
-
-  return "bg-[#fbe4e1] text-[#b5473b]";
-}
-
-function normalizeApiReport(report: ApiReport): Analysis {
-  return {
-    score: report.score,
-    status: {
-      label: report.statusLabel,
-      className: statusClass(report.statusLabel, report.score),
-    },
-    completeness: report.completeness,
-    clarity: report.clarity,
-    ties: report.ties,
-    flags: report.flags,
-    roadmap: report.roadmap,
-    showPaySmallSmall: report.showPaySmallSmall,
-    summary: report.summary,
-    disclaimer: report.disclaimer,
-    source: "ai",
-  };
-}
-
 function hasPaymentFailure() {
   if (typeof window === "undefined") {
     return false;
@@ -383,12 +339,15 @@ export function AiConsularCheckPage({
   const [visaClass, setVisaClass] = useState<(typeof visaClasses)[number]>("Study Permit");
   const [documentText, setDocumentText] = useState("");
   const [documentMode, setDocumentMode] = useState<"upload" | "paste">("upload");
-  const [uploadedFile, setUploadedFile] = useState("");
-  const [showScratch, setShowScratch] = useState(false);
-  const [scratchPurpose, setScratchPurpose] = useState("");
-  const [scratchFunds, setScratchFunds] = useState("");
-  const [scratchTies, setScratchTies] = useState("");
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [assessmentFiles, setAssessmentFiles] = useState<File[]>([]);
+  const [assessmentFileError, setAssessmentFileError] = useState("");
+  const [analysis, setAnalysis] = useState<ConsularReport | null>(null);
+  const [nationality, setNationality] = useState("");
+  const [residence, setResidence] = useState("");
+  const [routeDetails, setRouteDetails] = useState("");
+  const assessmentVersion = useRef(0);
+  const assessmentController = useRef<AbortController | null>(null);
+  useEffect(() => () => { uploadVersion.current++; assessmentVersion.current++; assessmentController.current?.abort(); }, []);
   const [assessmentError, setAssessmentError] = useState("");
   const [isAssessing, setIsAssessing] = useState(false);
   const [rewriteText, setRewriteText] = useState("");
@@ -397,20 +356,20 @@ export function AiConsularCheckPage({
   const [cvCountry, setCvCountry] = useState("Canada");
   const [cvText, setCvText] = useState("");
   const [cvFileName, setCvFileName] = useState("");
-  const [cvScratch, setCvScratch] = useState({ name: "", target: "", experience: "", education: "" });
-  const [cvResult, setCvResult] = useState<string[] | null>(null);
+  const [cvScratch, setCvScratch] = useState<CvBuilderData>(emptyCvBuilder);
+  const [cvTemplate, setCvTemplate] = useState<CvTemplateId>("classic");
+  const [cvResult, setCvResult] = useState<{ changes: string[]; draft?: CvDraft } | null>(null);
   const [coverMode, setCoverMode] = useState<EntryMode>("upload");
   const [coverText, setCoverText] = useState("");
   const [coverFileName, setCoverFileName] = useState("");
   const [coverScratch, setCoverScratch] = useState({ name: "", target: "", strengths: "" });
   const [coverResult, setCoverResult] = useState("");
-  const [appointment, setAppointment] = useState({
+  const [appointment, setAppointment] = useState<{ type: AppointmentType; city: string; date: string; slot: string }>({
     type: "Biometrics Enrolment",
-    city: "Lagos (VFS Global)",
+    city: appointmentCentres["Biometrics Enrolment"][0],
     date: "",
     slot: "",
   });
-  const [itinerarySession, setItinerarySession] = useState(0);
   const [interviewCategory, setInterviewCategory] = useState<InterviewCategory>("Study");
   const [pathway, setPathway] = useState("Canada Study Permit");
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -434,98 +393,90 @@ export function AiConsularCheckPage({
     ? Math.max(20, 100 - weakInterviewAnswers * Math.round(90 / interviewQuestions.length))
     : Math.min(100, 35 + answers.length * 10 + Math.min(25, answeredWords));
 
-  async function runAssessment() {
-    if (isReadingFile) return;
-    const trimmedDocument = documentText.trim();
-
+  function invalidateAssessment() {
+    assessmentVersion.current++;
+    assessmentController.current?.abort();
+    setIsAssessing(false);
+    setAnalysis(null);
     setAssessmentError("");
+  }
 
-    if (!trimmedDocument) {
-      setAssessmentError("Upload a document or paste its text before running the check.");
-      setAnalysis(null);
-      return;
-    }
-
-    if (trimmedDocument.length > MAX_TEXT_CHARS) {
-      setAssessmentError("Document text is too long. Please keep it under 12,000 characters.");
-      setAnalysis(null);
-      return;
-    }
-
+  async function runAssessment() {
+    if (isAssessing) return;
+    setAssessmentError("");
+    setAnalysis(null);
+    if (documentMode === "upload" && !assessmentFiles.length) { setAssessmentError("Upload your documents before clicking Proofread."); return; }
+    if (documentMode === "paste" && !documentText.trim()) { setAssessmentError("Paste your document text before clicking Proofread."); return; }
+    if (documentMode === "paste" && documentText.trim().length > MAX_ASSESSMENT_CHARS) { setAssessmentError(`Please supply at most ${MAX_ASSESSMENT_CHARS.toLocaleString()} characters.`); return; }
+    const version = ++assessmentVersion.current;
+    assessmentController.current?.abort();
+    const controller = new AbortController();
+    assessmentController.current = controller;
     setIsAssessing(true);
-
     try {
+      const documents = documentMode === "upload" ? await readAssessmentFiles(assessmentFiles, controller.signal) : [{ id: "document-1", name: "Pasted document", text: documentText.trim() }];
+      if (version !== assessmentVersion.current || controller.signal.aborted) return;
       const response = await fetch("/api/ai-consular-check", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          country,
-          visaClass,
-          documentText: trimmedDocument,
-        }),
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ country, visaClass, nationality, residence, routeDetails, documents }),
       });
-
-      const data = (await response.json()) as {
-        report?: ApiReport;
-        error?: string;
-      };
-
-      if (response.status === 402) {
-        setUnlocked(false);
-        setAnalysis(null);
-        setShowPaymentPrompt(true);
-        return;
-      }
-
+      const data = await response.json() as { report?: ConsularReport; error?: string; requestId?: string };
+      if (version !== assessmentVersion.current) return;
+      if (response.status === 402) { setUnlocked(false); setShowPaymentPrompt(true); return; }
       if (!response.ok || !data.report) {
-        throw new Error(data.error ?? "The AI review could not be completed.");
+        const reference = response.status !== 504 && typeof data.requestId === "string" && /^[a-f0-9-]{36}$/.test(data.requestId) ? ` Reference: ${data.requestId}` : "";
+        throw new Error(`${data.error ?? "The AI review could not be completed."}${reference}`);
       }
-
-      setAnalysis(normalizeApiReport(data.report));
+      setAnalysis(data.report);
     } catch (error) {
-      const fallback = analyzeDocument(trimmedDocument);
-      setAnalysis(fallback);
-      setAssessmentError(
-        error instanceof Error
-          ? `${error.message} Showing a local fallback check for now.`
-          : "The AI review could not be completed. Showing a local fallback check for now.",
-      );
+      if (version !== assessmentVersion.current || controller.signal.aborted) return;
+      if (error instanceof AssessmentAccessError) { setUnlocked(false); setShowPaymentPrompt(true); return; }
+      setAnalysis(null);
+      setAssessmentError(error instanceof Error ? error.message : "The AI review could not be completed. Please retry.");
     } finally {
-      setRewriteText((current) => current || trimmedDocument);
-      setIsAssessing(false);
+      if (version === assessmentVersion.current) {
+        if (documentMode === "paste") setRewriteText(current => current || documentText.trim());
+        setIsAssessing(false);
+      }
     }
   }
 
-  async function processFile(file: File | undefined, target: "document" | "cv" | "cover" = "document") {
+  function selectAssessmentFiles(files: File[]) {
+    if (!files.length) return;
+    invalidateAssessment();
+    setAssessmentFileError("");
+    try {
+      validateAssessmentFiles(files);
+      setAssessmentFiles(files);
+    } catch (error) {
+      setAssessmentFileError(error instanceof Error ? error.message : "Unable to select those files.");
+    }
+  }
+
+  function changeDocumentMode(mode: "upload" | "paste") {
+    if (mode === documentMode) return;
+    invalidateAssessment();
+    setAssessmentFileError("");
+    setDocumentMode(mode);
+  }
+
+  async function processFile(file: File | undefined, target: "cv" | "cover") {
     if (!file) return;
     const version = ++uploadVersion.current;
     setUploadError("");
     setIsReadingFile(true);
-    if (target === "document") { setDocumentText(""); setUploadedFile(""); setAnalysis(null); }
-    else if (target === "cv") { setCvText(""); setCvFileName(""); setCvResult(null); }
+    if (target === "cv") { setCvText(""); setCvFileName(""); setCvResult(null); }
     else { setCoverText(""); setCoverFileName(""); setCoverResult(""); }
     try {
       const text = await extractDocumentText(file);
       if (version !== uploadVersion.current) return;
-      if (target === "document") { setDocumentText(text); setUploadedFile(file.name); }
-      else if (target === "cv") { setCvText(text); setCvFileName(file.name); }
+      if (target === "cv") { setCvText(text); setCvFileName(file.name); }
       else { setCoverText(text); setCoverFileName(file.name); }
     } catch (error) {
       if (version === uploadVersion.current) setUploadError(error instanceof Error ? error.message : "Unable to read that file.");
     } finally {
       if (version === uploadVersion.current) setIsReadingFile(false);
     }
-  }
-
-  function changeDocumentMode(mode: "upload" | "paste") {
-    if (mode === documentMode) return;
-    uploadVersion.current++;
-    setIsReadingFile(false);
-    setUploadError("");
-    setAssessmentError("");
-    setDocumentMode(mode);
   }
 
   function changeCvMode(mode: EntryMode) {
@@ -544,16 +495,6 @@ export function AiConsularCheckPage({
     setUploadError("");
     setCoverResult("");
     setCoverMode(mode);
-  }
-
-  function removeDocument() {
-    uploadVersion.current++;
-    setIsReadingFile(false);
-    setDocumentText("");
-    setUploadedFile("");
-    setAnalysis(null);
-    setUploadError("");
-    setAssessmentError("");
   }
 
   async function startPayment(event: React.FormEvent<HTMLFormElement>) {
@@ -583,22 +524,6 @@ export function AiConsularCheckPage({
       checkoutPending.current = false;
       setIsStartingPayment(false);
     }
-  }
-
-  function buildFromScratch() {
-    if (!scratchPurpose.trim() || !scratchFunds.trim() || !scratchTies.trim()) {
-      setAssessmentError("Fill in purpose, funding and ties so the draft has enough detail.");
-      return;
-    }
-
-    changeDocumentMode("paste");
-    setUploadedFile("");
-    setAnalysis(null);
-    setDocumentText(
-      `Statement of Purpose\n\nI am writing to explain the purpose of my intended application. ${scratchPurpose}. This plan is funded as follows: ${scratchFunds}. I confirm the following ties to Nigeria, which I will return to on completion of this trip: ${scratchTies}. I have carefully researched this opportunity and am confident it represents the logical next step in my personal and professional plan.`,
-    );
-    setShowScratch(false);
-    setAssessmentError("");
   }
 
   function runRewrite() {
@@ -635,10 +560,7 @@ export function AiConsularCheckPage({
   }
 
   function runCvOptimize() {
-    const source =
-      cvMode === "scratch"
-        ? `${cvScratch.name} ${cvScratch.target} ${cvScratch.experience} ${cvScratch.education}`.trim()
-        : cvText.trim();
+    const source = cvText.trim();
 
     if (!source) {
       setCvResult(null);
@@ -647,14 +569,15 @@ export function AiConsularCheckPage({
 
     const hasNumbers = /\d/.test(source);
 
-    setCvResult([
-      "Reformatted to a clean single-column, ATS-readable layout with standard headings.",
-      `Applied ${cvCountry} conventions: ${atsRules[cvCountry] ?? defaultAtsRule}.`,
+    const changes = [
+      "Use a clean single-column layout with standard headings for recruiter and ATS readability.",
+      `Country guidance for ${cvCountry}: ${cvCountryProfile(cvCountry, "job").guidance}`,
       hasNumbers
-        ? "Kept quantified achievements because numbers improve ATS and recruiter scanning."
-        : "Added prompts to quantify achievements such as team size, revenue, patient volume or output.",
-      "Inserted a tighter professional summary and keyword-friendly skills block for the target role.",
-    ]);
+        ? "Your uploaded text includes numbers. Check that they describe your achievements accurately."
+        : "Consider quantifying achievements such as team size, revenue or output where supported by your record.",
+      "Tailor your profile and relevant skills to the target role and job description.",
+    ];
+    setCvResult({ changes });
   }
 
   function runCoverLetter() {
@@ -698,33 +621,6 @@ export function AiConsularCheckPage({
     setAnswers([]);
     setAnswerDraft("");
     setQuestionIndex(0);
-  }
-
-  function wipeSessionData() {
-    uploadVersion.current++;
-    setItinerarySession((current) => current + 1);
-    setIsReadingFile(false);
-    setUploadError("");
-    setScratchPurpose("");
-    setScratchFunds("");
-    setScratchTies("");
-    setCvScratch({ name: "", target: "", experience: "", education: "" });
-    setCoverScratch({ name: "", target: "", strengths: "" });
-    setDocumentText("");
-    setDocumentMode("upload");
-    setUploadedFile("");
-    setAnalysis(null);
-    setAssessmentError("");
-    setRewriteText("");
-    setRewriteResult(null);
-    setCvText("");
-    setCvFileName("");
-    setCvResult(null);
-    setCoverText("");
-    setCoverFileName("");
-    setCoverResult("");
-    setAppointment((current) => ({ ...current, date: "", slot: "" }));
-    resetInterview();
   }
 
   return (
@@ -777,27 +673,8 @@ export function AiConsularCheckPage({
 
       <section className="bg-[#f6fbfd] px-5 py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
-          <div className="mb-6 rounded-md border border-[#bfe4e8] bg-[#e8f6fb] px-4 py-3 text-sm leading-6 text-[#0f5e68]">
-            Files are read in your browser. Document text is sent to our AI
-            provider when you request a pre-assessment. Payments are handled by Flutterwave.
-          </div>
-
-          <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#d7dfe5] bg-white px-4 py-3 text-sm text-[#5b6870]">
-            <span>
-              Your documents and answers stay in this page until you leave or wipe
-              them. Pre-assessment sends your document text to the AI provider.
-            </span>
-            <button
-              type="button"
-              onClick={wipeSessionData}
-              className="rounded-full border border-[#d7dfe5] px-4 py-2 text-xs font-bold text-[#07141a] transition hover:border-[#b5473b] hover:text-[#b5473b]"
-            >
-              Wipe my data now
-            </button>
-          </div>
-
           {isReadingFile ? <p role="status" className="mb-4">Reading your document…</p> : null}
-          {uploadError ? <p role="alert" className="mb-4 text-red-700">{uploadError}</p> : null}
+          {uploadError && activeTool !== "document" ? <p role="alert" className="mb-4 text-red-700">{uploadError}</p> : null}
 
           {paymentFailed && !unlocked ? (
             <div className="mb-8 rounded-md border border-[#f0a42f] bg-[#fff7e8] px-4 py-3 text-sm leading-6 text-[#93670f]">
@@ -877,114 +754,66 @@ export function AiConsularCheckPage({
                       <SelectField
                         label="Target Country"
                         value={country}
-                        onChange={setCountry}
+                        onChange={value => { invalidateAssessment(); setCountry(value); }}
                         options={worldCountries}
                       />
                       <SelectField
                         label="Visa Class"
                         value={visaClass}
-                        onChange={(value) => setVisaClass(value as (typeof visaClasses)[number])}
+                        onChange={value => { invalidateAssessment(); setVisaClass(value as (typeof visaClasses)[number]); }}
                         options={visaClasses}
                       />
                     </div>
 
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <ScratchInput label="Nationality (optional)" value={nationality} onChange={value => { invalidateAssessment(); setNationality(value); }} />
+                      <ScratchInput label="Country of residence (optional)" value={residence} onChange={value => { invalidateAssessment(); setResidence(value); }} />
+                    </div>
+                    <ScratchInput label="Exact visa route and relevant circumstances (optional)" value={routeDetails} onChange={value => { invalidateAssessment(); setRouteDetails(value); }} />
+                    <p className="text-xs leading-5 text-[#5b6870]">Current official guidance is connected for Canada, the UK and the US. Other destinations receive a limited document review with unverified requirements.</p>
                     <p className="mt-5 text-sm leading-6 text-[#5b6870]">
-                      Upload a document or paste its text. Either option can be used for the pre-assessment.
+                      Upload your travel or visa documents, then click Proofread to review them. You can also paste text. A statement of purpose alone cannot establish the strength of a full application.
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Document input method">
-                      {([["upload", "Upload document"], ["paste", "Paste text"]] as const).map(([mode, label]) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          aria-pressed={documentMode === mode}
-                          onClick={() => changeDocumentMode(mode)}
-                          className={`rounded-md border px-4 py-2 text-sm font-bold ${documentMode === mode ? "border-[#07141a] bg-[#07141a] text-white" : "border-[#d7dfe5] bg-[#fbf8f2] text-[#1b1f27]"}`}
-                        >
+                      {([["upload", "Upload documents"], ["paste", "Paste text"]] as const).map(([mode, label]) => (
+                        <button key={mode} type="button" aria-pressed={documentMode === mode} onClick={() => changeDocumentMode(mode)} className={`rounded-md border px-4 py-2 text-sm font-bold ${documentMode === mode ? "border-[#07141a] bg-[#07141a] text-white" : "border-[#d7dfe5] bg-[#fbf8f2] text-[#1b1f27]"}`}>
                           {label}
                         </button>
                       ))}
                     </div>
-
                     {documentMode === "upload" ? (
-                      <UploadCard
-                        documentName="document"
-                        description="Click the button below to upload your visa document for a readiness review before you apply."
-                        fileName={uploadedFile}
-                        isReading={isReadingFile}
-                        onFileSelect={(file) => void processFile(file)}
-                        onRemove={removeDocument}
-                        helpText="PDF, DOCX or TXT · Up to 10MB and 100 PDF pages. For scanned or password-protected PDFs, paste the text instead."
-                        className="mt-4"
-                      />
-                    ) : null}
-
-                    {documentMode === "paste" || documentText ? (
-                      <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
-                        {documentMode === "paste" ? "Paste your document text" : "Document text ready for review"}
-                        <textarea
-                          value={documentText}
-                          readOnly={documentMode === "upload"}
-                          onChange={(event) => {
-                            setDocumentText(event.target.value);
-                            setUploadedFile("");
-                            setAnalysis(null);
-                            setAssessmentError("");
-                          }}
-                          placeholder="Statement of purpose, sponsor affidavit, financial summary, employment letter..."
-                          className={`${inputClass} min-h-52 resize-y leading-7`}
-                        />
-                      </label>
-                    ) : null}
-                    <p className="mt-2 text-xs text-[#5b6870]">
-                      {documentText.length.toLocaleString()} / {MAX_TEXT_CHARS.toLocaleString()} characters
-                    </p>
-
-                    <div className="mt-3 flex flex-wrap gap-3 text-sm font-bold">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          changeDocumentMode("paste");
-                          setDocumentText(sampleWeakSop);
-                          setUploadedFile("");
-                          setAnalysis(null);
-                          setAssessmentError("");
+                      <UploadCard documentName="documents" multiple onFilesSelect={selectAssessmentFiles} onFileSelect={file => selectAssessmentFiles([file])}
+                        description="Select your statement of purpose, financial evidence, sponsor letter, employment letter, itinerary or other travel documents."
+                        fileName={assessmentFiles.map(file => file.name).join(", ")} isReading={isAssessing} readingMessage="Proofreading…" error={assessmentFileError}
+                        onRemove={() => { invalidateAssessment(); setAssessmentFiles([]); setAssessmentFileError(""); }}
+                        helpText="Up to 6 PDF, DOCX or TXT files · 10MB per file, 30MB total, 100 pages per PDF. Processing starts when you click Proofread. Document text is limited to 60,000 characters total."
+                        className="mt-4" />
+                    ) : (
+                    <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
+                      Paste your document text
+                      <textarea
+                        value={documentText}
+                        onChange={(event) => {
+                          invalidateAssessment();
+                          setDocumentText(event.target.value);
                         }}
-                        className="text-[#0098ba] underline underline-offset-2"
-                      >
-                        Load sample weak SOP
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowScratch((current) => !current)}
-                        className="text-[#0098ba] underline underline-offset-2"
-                      >
-                        Start from scratch
-                      </button>
-                    </div>
-
-                    {showScratch ? (
-                      <div className="mt-4 rounded-md border border-dashed border-[#d7dfe5] bg-[#fbf8f2] p-4">
-                        <ScratchInput label="Purpose of trip/study/work" value={scratchPurpose} onChange={setScratchPurpose} />
-                        <ScratchInput label="How is it funded?" value={scratchFunds} onChange={setScratchFunds} />
-                        <ScratchInput label="What ties you to Nigeria?" value={scratchTies} onChange={setScratchTies} />
-                        <button
-                          type="button"
-                          onClick={buildFromScratch}
-                          className="mt-2 rounded-md border border-[#07141a] px-4 py-2 text-sm font-black text-[#07141a] transition hover:bg-[#07141a] hover:text-white"
-                        >
-                          Build my document
-                        </button>
-                      </div>
-                    ) : null}
+                        placeholder="Statement of purpose, sponsor affidavit, financial summary, employment letter..."
+                        className={`${inputClass} min-h-52 resize-y leading-7`}
+                      />
+                    </label>
+                    )}
+                    <p className="mt-2 text-xs text-[#5b6870]">
+                      {documentMode === "paste" ? `${documentText.length.toLocaleString()} / ${MAX_ASSESSMENT_CHARS.toLocaleString()} characters` : assessmentFiles.length ? `${assessmentFiles.length} document${assessmentFiles.length === 1 ? "" : "s"} selected. Click Proofread to begin.` : "Upload your documents to begin."}
+                    </p>
 
                     <div className="mt-5 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
                         onClick={runAssessment}
-                        disabled={isAssessing || isReadingFile}
+                        disabled={isAssessing}
                         className="rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a] transition hover:bg-[#ffb347] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {isAssessing ? "Checking..." : "Run Pre-Assessment Check"}
+                        {isAssessing ? "Proofreading and reviewing…" : "Proofread"}
                       </button>
                       <p className="m-0 text-xs leading-5 text-[#5b6870]">
                         Nothing is submitted to any embassy.
@@ -997,7 +826,7 @@ export function AiConsularCheckPage({
                     ) : null}
                   </Panel>
 
-                  <Panel>{analysis ? <AssessmentReport analysis={analysis} country={country} visaClass={visaClass} /> : <EmptyReport />}</Panel>
+                  <Panel>{analysis ? <AssessmentReport report={analysis} country={country} visaClass={visaClass} documentNames={documentMode === "upload" ? Object.fromEntries(assessmentFiles.map((file, index) => [`document-${index + 1}`, file.name])) : { "document-1": "Pasted document" }} /> : <EmptyReport />}</Panel>
                 </div>
               ) : null}
 
@@ -1060,26 +889,33 @@ export function AiConsularCheckPage({
                   ) : null}
                   {cvMode === "scratch" ? (
                     <Panel>
-                      <div className="grid gap-4">
-                        <ScratchInput label="Full name" value={cvScratch.name} onChange={(value) => setCvScratch((current) => ({ ...current, name: value }))} />
-                        <ScratchInput label="Target role / programme" value={cvScratch.target} onChange={(value) => setCvScratch((current) => ({ ...current, target: value }))} />
-                        <ScratchArea label="Work experience" value={cvScratch.experience} onChange={(value) => setCvScratch((current) => ({ ...current, experience: value }))} />
-                        <ScratchArea label="Education and certifications" value={cvScratch.education} onChange={(value) => setCvScratch((current) => ({ ...current, education: value }))} />
-                      </div>
+                      {!cvResult?.draft ? <div className="mb-8"><CvTemplatePicker value={cvTemplate} onChange={setCvTemplate} /></div> : null}
+                      <CvScratchBuilder country={cvCountry} value={cvScratch} onChange={value => { setCvScratch(value); setCvResult(null); }} onBuild={draft => setCvResult({ draft, changes: [
+                        `Built your ${cvScratch.kind === "academic" ? "Academic CV" : "Job CV"} from the completed sections.`,
+                        `Prepared for ${cvCountry} using ${draft.paperSize} paper and reverse-chronological education and experience.`,
+                        "Only supplied details were included. Check the draft against the application instructions before sending it.",
+                      ] })} />
                     </Panel>
                   ) : null}
-                  <div className="flex justify-center">
-                    <button type="button" onClick={runCvOptimize} disabled={isReadingFile || (cvMode !== "scratch" && !cvText.trim())} className="rounded-lg bg-[#07141a] px-6 py-3 text-sm font-black text-white transition hover:bg-[#07324a] disabled:cursor-not-allowed disabled:opacity-40">
+                  {cvMode === "upload" ? <div className="flex justify-center">
+                    <button type="button" onClick={runCvOptimize} disabled={isReadingFile || !cvText.trim()} className="rounded-lg bg-[#07141a] px-6 py-3 text-sm font-black text-white transition hover:bg-[#07324a] disabled:cursor-not-allowed disabled:opacity-40">
                       Optimise for ATS
                     </button>
-                  </div>
+                  </div> : null}
                   {cvResult ? (
                     <Panel>
-                      <ReportSection title={`ATS optimisation - ${cvCountry}`}>
-                        {cvResult.map((item) => (
-                          <FlagCard key={item} type="excellent" title="Applied" body={item} />
+                      <ReportSection title={`${cvMode === "scratch" ? "Build summary" : "CV guidance"} - ${cvCountry}`}>
+                        {cvResult.changes.map((item) => (
+                          <FlagCard key={item} type="excellent" title={cvMode === "scratch" ? "Prepared" : "Guidance"} body={item} />
                         ))}
                       </ReportSection>
+                      {cvResult.draft ? (
+                        <ReportSection title="Your CV draft">
+                          <CvTemplatePicker value={cvTemplate} onChange={setCvTemplate} />
+                          <CvPdfPreview key={`${cvTemplate}-${cvResult.draft.paperSize}-${cvResult.draft.text}`} draft={cvResult.draft} template={cvTemplate} />
+                          <details className="mt-5"><summary className="cursor-pointer text-sm font-bold text-[#0f5e68]">View CV text</summary><textarea aria-label="Your CV draft" readOnly value={cvResult.draft.text} className={`${inputClass} mt-3 min-h-60 resize-y leading-7`} /></details>
+                        </ReportSection>
+                      ) : null}
                     </Panel>
                   ) : null}
                 </div>
@@ -1101,9 +937,9 @@ export function AiConsularCheckPage({
                   ) : null}
                   {coverMode === "scratch" ? (
                     <div className="mt-4 grid gap-4">
-                      <ScratchInput label="Your name" value={coverScratch.name} onChange={(value) => setCoverScratch((current) => ({ ...current, name: value }))} />
-                      <ScratchInput label="Target programme / employer" value={coverScratch.target} onChange={(value) => setCoverScratch((current) => ({ ...current, target: value }))} />
-                      <ScratchInput label="Key strengths" value={coverScratch.strengths} onChange={(value) => setCoverScratch((current) => ({ ...current, strengths: value }))} />
+                      <ScratchInput label="Your name" value={coverScratch.name} onChange={(value) => { setCoverScratch((current) => ({ ...current, name: value })); setCoverResult(""); }} />
+                      <ScratchInput label="Target programme / employer" value={coverScratch.target} onChange={(value) => { setCoverScratch((current) => ({ ...current, target: value })); setCoverResult(""); }} />
+                      <ScratchInput label="Key strengths" value={coverScratch.strengths} onChange={(value) => { setCoverScratch((current) => ({ ...current, strengths: value })); setCoverResult(""); }} />
                     </div>
                   ) : null}
                   <button type="button" onClick={runCoverLetter} disabled={isReadingFile} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
@@ -1111,7 +947,8 @@ export function AiConsularCheckPage({
                   </button>
                   {coverResult ? (
                     <ReportSection title="Your cover letter draft">
-                      <textarea readOnly value={coverResult} className={`${inputClass} min-h-60 resize-y leading-7`} />
+                      <textarea aria-label="Your cover letter draft" readOnly value={coverResult} className={`${inputClass} min-h-60 resize-y leading-7`} />
+                      {coverMode === "scratch" ? <DocumentPdfDownload key={coverResult} kind="Cover Letter" name={coverScratch.name.trim()} text={coverResult} /> : null}
                     </ReportSection>
                   ) : null}
                 </Panel>
@@ -1120,8 +957,11 @@ export function AiConsularCheckPage({
               {activeTool === "appointments" ? (
                 <Panel>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <SelectField label="Appointment type" value={appointment.type} onChange={(value) => setAppointment((current) => ({ ...current, type: value }))} options={["Biometrics Enrolment", "Medical Examination", "Cart & Go Visa Officer Consultation"]} />
-                    <SelectField label="City / Visa Application Centre" value={appointment.city} onChange={(value) => setAppointment((current) => ({ ...current, city: value }))} options={["Lagos (VFS Global)", "Abuja (VFS Global)", "Port Harcourt", "Cart & Go Office, Yaba"]} />
+                    <SelectField label="Appointment type" value={appointment.type} onChange={(value) => {
+                      if (value !== "Biometrics Enrolment" && value !== "Medical Examination") return;
+                      setAppointment((current) => ({ ...current, type: value, city: appointmentCentres[value][0], slot: "" }));
+                    }} options={Object.keys(appointmentCentres)} />
+                    <SelectField label="City / Visa Application Centre" value={appointment.city} onChange={(value) => setAppointment((current) => ({ ...current, city: value, slot: "" }))} options={appointmentCentres[appointment.type]} />
                   </div>
                   <label className="mt-4 block text-[12.5px] font-semibold text-[#07141a]">
                     Preferred date
@@ -1158,7 +998,7 @@ export function AiConsularCheckPage({
               ) : null}
 
               <div className={activeTool === "itinerary" ? "" : "hidden"}>
-                <ItineraryPlanner key={itinerarySession} />
+                <ItineraryPlanner />
               </div>
 
               {activeTool === "interview" ? (
@@ -1341,96 +1181,6 @@ export function AiConsularCheckPage({
   );
 }
 
-function AssessmentReport({
-  analysis,
-  country,
-  visaClass,
-}: {
-  analysis: Analysis;
-  country: string;
-  visaClass: string;
-}) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs font-black uppercase text-[#0098ba]">
-          Consular pre-assessment report
-        </p>
-        <span className="rounded-full bg-[#e8f6fb] px-3 py-1 text-xs font-black text-[#0098ba]">
-          {analysis.source === "ai" ? "AI review" : "Local fallback"}
-        </span>
-      </div>
-      <p className="mt-2 text-sm text-[#5b6870]">
-        <b>Target:</b> {country} | <b>Class:</b> {visaClass}
-      </p>
-      {analysis.summary ? (
-        <p className="mt-4 rounded-md bg-[#f6fbfd] p-4 text-sm leading-6 text-[#5b6870]">
-          {analysis.summary}
-        </p>
-      ) : null}
-
-      <div className="mt-6 flex flex-wrap items-center gap-5">
-        <Score score={analysis.score} />
-        <span className={`rounded-full px-4 py-2 text-sm font-black ${analysis.status.className}`}>
-          {analysis.status.label}
-        </span>
-      </div>
-
-      <div className="mt-8 space-y-3 text-sm leading-6 text-[#5b6870]">
-        <p>
-          <b>Intent and credibility ({analysis.clarity}/30):</b>{" "}
-          {analysis.clarity >= 20 ? "A reasonably clear statement of purpose was found." : "The stated purpose is vague or generic."}
-        </p>
-        <p>
-          <b>Financial sufficiency ({analysis.completeness}/30):</b>{" "}
-          {analysis.completeness >= 20 ? "Financial evidence appears traceable." : "Financial evidence is thin or not clearly traceable."}
-        </p>
-        <p>
-          <b>Home-country ties ({analysis.ties}/40):</b>{" "}
-          {analysis.ties >= 25 ? "Reasonable evidence of ties was found." : "Little evidence of ties was found."}
-        </p>
-      </div>
-
-      <ReportSection title="Flags">
-        {analysis.flags.map((flag) => (
-          <FlagCard key={`${flag.title}-${flag.body}`} type={flag.type} title={flag.title} body={flag.body} />
-        ))}
-      </ReportSection>
-
-      <ReportSection title="Roadmap to improve">
-        {analysis.roadmap.map((step, index) => (
-          <div key={step} className="flex gap-3 text-sm leading-6">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#07141a] text-xs font-black text-white">
-              {index + 1}
-            </span>
-            <span className="text-[#5b6870]">{step}</span>
-          </div>
-        ))}
-      </ReportSection>
-
-      {analysis.disclaimer ? (
-        <p className="mt-6 rounded-md bg-[#fff7e8] p-4 text-xs leading-5 text-[#93670f]">
-          {analysis.disclaimer}
-        </p>
-      ) : null}
-
-      <div className="mt-7 flex flex-wrap gap-3">
-        <WhatsAppLeadActions
-          message={`Hello Cart&Go, I want help with my AI Consular Check report.\nTarget: ${country}\nVisa class: ${visaClass}\nScore: ${analysis.score}/100\nStatus: ${analysis.status.label}`}
-        />
-        {analysis.showPaySmallSmall ? (
-          <Link
-            href="/services?service=pay-small-small"
-            className="rounded-md border border-[#07141a] px-5 py-3 text-sm font-black text-[#07141a] transition hover:bg-[#07141a] hover:text-white"
-          >
-            Activate Pay Small Small
-          </Link>
-        ) : null}
-      </div>
-    </>
-  );
-}
-
 function EmptyReport() {
   return (
     <div className="flex min-h-96 flex-col justify-center rounded-md bg-[#e8f6fb] p-6">
@@ -1439,8 +1189,7 @@ function EmptyReport() {
         Your readiness report will appear here.
       </h2>
       <p className="mt-3 max-w-xl leading-7 text-[#5b6870]">
-        Paste a document, upload a text file or build a starter draft, then run
-        the check to see score, vulnerabilities and practical next steps.
+        Upload travel documents or paste their text, then run the review to see evidence-based findings, proofreading corrections and questions to resolve.
       </p>
     </div>
   );
@@ -1496,23 +1245,6 @@ function ScratchInput({
     <label className="mb-3 block text-[12.5px] font-semibold text-[#07141a]">
       {label}
       <input value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />
-    </label>
-  );
-}
-
-function ScratchArea({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="block text-[12.5px] font-semibold text-[#07141a]">
-      {label}
-      <textarea value={value} onChange={(event) => onChange(event.target.value)} className={`${inputClass} min-h-32`} />
     </label>
   );
 }

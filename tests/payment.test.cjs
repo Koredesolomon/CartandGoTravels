@@ -28,6 +28,8 @@ const callback = load('src/app/ai-consular-check/payment-callback/route.ts');
 const ai = load('src/app/api/ai-consular-check/route.ts');
 const verify = load('src/app/api/flutterwave/verify/route.ts');
 const checkout = load('src/app/api/flutterwave/checkout/route.ts');
+const ocr = load('src/app/api/document-ocr/route.ts');
+const itinerary = load('src/app/api/itinerary-pdf/route.ts');
 const originalFetch = global.fetch;
 Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'test-secret-that-is-more-than-32-characters', FLUTTERWAVE_SECRET_KEY: 'test', FLUTTERWAVE_AMOUNT: '49.99', FLUTTERWAVE_CURRENCY: 'USD', DB_HOST: 'localhost', DB_PORT: '3306', DB_USER: 'test-user', DB_PASSWORD: 'test-password', DB_NAME: 'test-database', APP_URL: 'https://site.test' });
 
@@ -55,19 +57,29 @@ test('AI and verification APIs deny unpaid and legacy-cookie requests before ups
   } finally { global.fetch = originalFetch; }
 });
 
-test('consular requires a paid session in every environment even with retired bypass flags', async () => {
-  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT, CONSULAR_LOCAL_PREVIEW: process.env.CONSULAR_LOCAL_PREVIEW };
+test('all consular entry points require signed paid access in every environment even with retired bypass flags', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT, CONSULAR_LOCAL_PREVIEW: process.env.CONSULAR_LOCAL_PREVIEW, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
   const { getConsularAccessRef } = load('src/lib/consularAccess.ts');
   global.fetch = async () => { throw new Error('Unpaid requests must not call upstream'); };
-  const request = () => new NextRequest('http://localhost:3000/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country: 'Canada', visaClass: 'Study Permit', documentText: 'Synthetic application text' }) });
+  const request = () => new NextRequest('http://localhost:3000/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   try {
-    process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
+    process.env.ANTHROPIC_API_KEY = 'test-key';
     process.env.CONSULAR_LOCAL_PREVIEW = 'true';
     for (const mode of ['development', 'production', 'test']) {
       process.env.NODE_ENV = mode;
-      assert.equal(getConsularAccessRef(undefined), null);
-      assert.equal((await verify.POST(request())).status, 402);
-      assert.equal((await ai.POST(request())).status, 402);
+      for (const flag of [undefined, 'false', '1', 'TRUE', 'true']) {
+        if (flag === undefined) delete process.env.CONSULAR_DEV_BYPASS_PAYMENT;
+        else process.env.CONSULAR_DEV_BYPASS_PAYMENT = flag;
+        for (const token of [undefined, 'forged', payment.signToken('access', 'expired-ref', -1), payment.signToken('checkout', 'wrong-purpose')]) {
+          assert.equal(getConsularAccessRef(token), null);
+          for (const route of [verify, ai, ocr, itinerary]) {
+            const unpaid = request();
+            if (token) unpaid.cookies.set(payment.ACCESS_COOKIE, token);
+            assert.equal((await route.POST(unpaid)).status, 402);
+          }
+        }
+        assert.equal(getConsularAccessRef(payment.signToken('access', 'paid-ref')), 'paid-ref');
+      }
       const paidRequest = request();
       paidRequest.cookies.set(payment.ACCESS_COOKIE, payment.signToken('access', 'paid-ref'));
       assert.equal((await verify.POST(paidRequest)).status, 200);
@@ -76,6 +88,47 @@ test('consular requires a paid session in every environment even with retired by
   } finally {
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     global.fetch = originalFetch;
+  }
+});
+
+test('checkout and verified callback grant access that remains valid after bypass removal', async () => {
+  const savedKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = 'synthetic-test-key';
+  let checkoutRef;
+  const consumed = new Set();
+  executeDatabase = async (options, values) => {
+    if (options.sql.startsWith('SELECT')) return [[], []];
+    const key = values[0] + ':' + values[1];
+    if (consumed.has(key)) throw Object.assign(new Error('Duplicate'), { code: 'ER_DUP_ENTRY' });
+    consumed.add(key); return [{ affectedRows: 1 }, []];
+  };
+  global.fetch = async (url, options) => {
+    if (url === 'https://api.flutterwave.com/v3/payments') {
+      checkoutRef = JSON.parse(options.body).tx_ref;
+      return Response.json({ status: 'success', data: { link: 'https://checkout.flutterwave.com/v3/hosted/pay/synthetic' } });
+    }
+    assert.equal(url, 'https://api.flutterwave.com/v3/transactions/7654321/verify');
+    return Response.json({ status: 'success', data: { id: 7654321, tx_ref: checkoutRef, status: 'successful', currency: 'USD', amount: 49.99 } });
+  };
+  try {
+    const started = await checkout.POST(new NextRequest('https://site.test/api/flutterwave/checkout', { method: 'POST', headers: { origin: 'https://site.test', 'content-type': 'application/json' }, body: JSON.stringify({ email: 'synthetic@example.test' }) }));
+    assert.equal(started.status, 200);
+    const checkoutToken = started.cookies.get(payment.CHECKOUT_COOKIE).value;
+    const completed = await callback.GET(callbackRequest('7654321', checkoutToken));
+    assert.equal(completed.headers.get('location'), 'https://site.test/ai-consular-check?payment=success');
+    const accessToken = completed.cookies.get(payment.ACCESS_COOKIE).value;
+    assert.equal(payment.readToken(accessToken, 'access').ref, checkoutRef);
+    for (const [route, status] of [[verify, 200], [ai, 400], [ocr, 400], [itinerary, 400]]) {
+      const paid = new NextRequest('https://site.test/api/consular', { method: 'POST', headers: { cookie: `${payment.ACCESS_COOKIE}=${accessToken}`, 'content-type': 'application/json' }, body: '{}' });
+      assert.equal((await route.POST(paid)).status, status, 'Paid users pass access checks and reach request validation');
+    }
+    const replay = await callback.GET(callbackRequest('7654321', checkoutToken));
+    assert.equal(replay.headers.get('location'), 'https://site.test/ai-consular-check?payment=failed');
+    assert.equal(replay.cookies.get(payment.ACCESS_COOKIE), undefined);
+  } finally {
+    global.fetch = originalFetch;
+    executeDatabase = async () => [[], []];
+    if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = savedKey;
   }
 });
 
@@ -190,6 +243,8 @@ test('document uploads read TXT and DOCX contents and reject empty, oversized, i
   assert.equal(await extractDocumentText(new File(['Actual application text'], 'sample.txt')), 'Actual application text');
   await assert.rejects(extractDocumentText(new File([], 'empty.txt')), /empty/);
   await assert.rejects(extractDocumentText(new File(['x'.repeat(12001)], 'long.txt')), /too long/);
+  assert.equal((await extractDocumentText(new File(['x'.repeat(12001)], 'long.txt'), { maxChars: 60000 })).length, 12001);
+  await assert.rejects(extractDocumentText(new File(['x'.repeat(60001)], 'too-long.txt'), { maxChars: 60000 }), /too long/);
   await assert.rejects(extractDocumentText(new File(['x'.repeat(10 * 1024 * 1024 + 1)], 'large.txt')), /10MB/);
   await assert.rejects(extractDocumentText(new File(['bad'], 'bad.docx')), /Unable to read/);
   await assert.rejects(extractDocumentText(new File(['bad'], 'bad.exe')), /Choose/);
@@ -232,9 +287,30 @@ test('PDF uploads extract actual text and reject documents without readable text
   try {
     const { extractDocumentText } = load('src/lib/documentText.ts');
     assert.equal(await extractDocumentText(new File([pdfFixture('Actual PDF application text')], 'sample.pdf')), 'Actual PDF application text');
+    assert.equal(await extractDocumentText(new File([pdfFixture('Actual PDF application text')], 'sample.pdf'), { preservePages: true }), '[Page 1]\nActual PDF application text');
     await assert.rejects(extractDocumentText(new File([pdfFixture('')], 'scan.pdf')), /No readable text/);
+    await assert.rejects(extractDocumentText(new File([pdfFixture('')], 'scan.pdf'), { preservePages: true }), /No readable text/);
     await assert.rejects(extractDocumentText(new File(['invalid'], 'bad.pdf')), /Unable to read/);
   } finally { worker.destroy(); overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
+});
+
+test('mixed text/scanned PDFs are rejected instead of assessing a partial extraction', async () => {
+  let destroyed = false;
+  overrides.set('pdfjs-dist/legacy/build/pdf.mjs', {
+    GlobalWorkerOptions: {}, VerbosityLevel: { ERRORS: 0 }, OPS: { paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 87 },
+    getDocument: () => ({
+      destroy: async () => { destroyed = true; },
+      promise: Promise.resolve({ numPages: 2, getPage: async number => ({
+        getTextContent: async () => ({ items: number === 1 ? [{ str: 'A text-based first page', hasEOL: true }] : [] }),
+        getOperatorList: async () => ({ fnArray: [85] }), cleanup: () => {},
+      }) }),
+    }),
+  });
+  try {
+    const { extractDocumentText } = load('src/lib/documentText.ts');
+    await assert.rejects(extractDocumentText(new File(['synthetic'], 'mixed.pdf'), { preservePages: true }), /Page 2.*partial review/);
+    assert.equal(destroyed, true);
+  } finally { overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
 });
 
 test('checkout reports safe configuration and provider failures without logging secrets', async () => {

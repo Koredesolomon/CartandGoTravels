@@ -150,6 +150,23 @@ test('PDF requires paid access on every host even with the retired preview flag'
   }
 });
 
+test('PDF export requires payment even if the removed development bypass flag is still configured', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_DEV_BYPASS_PAYMENT: process.env.CONSULAR_DEV_BYPASS_PAYMENT };
+  try {
+    process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
+    for (const mode of ['development', 'production', 'test']) {
+      process.env.NODE_ENV = mode;
+      const response = await POST(await req(fixture(), false));
+      assert.equal(response.status, 402);
+    }
+    process.env.NODE_ENV = 'development';
+    delete process.env.CONSULAR_DEV_BYPASS_PAYMENT;
+    assert.equal((await POST(await req(fixture(), false))).status, 402);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
 
 test('required documents are validated from file contents and included once for every city stop', async () => {
   const input = fixture();

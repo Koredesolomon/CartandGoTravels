@@ -4,8 +4,7 @@ import Link from "next/link";
 const footerLinks = [
   ["Visa Services", "/services?service=visa-assistance#visa-assistance"],
   ["Flights & Hotels", "/services?service=flights#flights"],
-  ["Online Courses", "/services"],
-  ["Scholarships", "/services"],
+  ["Blog", "/blog"],
   ["About Us", "/about"],
 ] as const;
 
@@ -28,8 +27,7 @@ export function SiteFooter() {
             </span>
           </div>
           <p className="max-w-md text-sm leading-7 text-white/70">
-            Visa processing, immigration, flights, hotels, certified online courses,
-            and global scholarships under one roof.
+            Visa processing, immigration, flights, and hotels under one roof.
           </p>
         </div>
 
