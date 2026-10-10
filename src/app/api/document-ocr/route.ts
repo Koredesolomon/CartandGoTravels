@@ -4,6 +4,7 @@ import { ACCESS_COOKIE } from "@/lib/payment";
 import { getConsularAccessRef } from "@/lib/consularAccess";
 import { MAX_FILE_BYTES } from "@/lib/documentText";
 import { OCR_PROMPT, OCR_SCHEMA, validateOcrResult } from "@/lib/documentOcr";
+import { enqueueConsularJob } from "@/lib/consularJobs";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -53,9 +54,14 @@ export async function POST(request: NextRequest) {
   catch (error) { return json({ error: error instanceof InputError ? error.message : "Unable to read this PDF." }, error instanceof InputError ? error.status : 400); }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey.startsWith("your-")) return json({ error: "Scanned PDF reading needs a valid ANTHROPIC_API_KEY on the server." }, 503);
+  if (request.headers.get("prefer") === "respond-async") return enqueueConsularJob(access, 280_000, signal => transcribe(input, apiKey, signal));
+  return transcribe(input, apiKey, request.signal);
+}
+
+async function transcribe(input: Awaited<ReturnType<typeof readPdf>>, apiKey: string, signal: AbortSignal) {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", signal: AbortSignal.any([request.signal, AbortSignal.timeout(260_000)]),
+      method: "POST", signal: AbortSignal.any([signal, AbortSignal.timeout(260_000)]),
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6", max_tokens: 24000,

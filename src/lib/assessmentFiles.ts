@@ -1,7 +1,7 @@
 import { extractDocumentText, MAX_FILE_BYTES, ScannedPdfError } from "@/lib/documentText";
 import { MAX_ASSESSMENT_CHARS, MAX_ASSESSMENT_DOCUMENTS, type AssessmentDocument } from "@/lib/consularReview";
 import type { OcrResult } from "@/lib/documentOcr";
-import { readConsularResponse } from "@/lib/consularResponse";
+import { requestConsularResult } from "@/lib/consularRequest";
 
 export class AssessmentAccessError extends Error {}
 class AssessmentTimeoutError extends Error {}
@@ -30,9 +30,8 @@ export async function readAssessmentFiles(files: File[], signal: AbortSignal): P
       catch (error) {
         if (!(error instanceof ScannedPdfError)) throw error;
         signal.throwIfAborted();
-        const response = await fetch("/api/document-ocr", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: file, signal });
+        const { response, data } = await requestConsularResult<OcrResult>("scan", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: file }, signal);
         if (response.status === 401 || response.status === 402) throw new AssessmentAccessError("Payment is required or your session has expired.");
-        const data = await readConsularResponse<OcrResult>(response, "scan");
         if (data.code === "review_timeout") throw new AssessmentTimeoutError(data.error ?? "Session timeout, please retry");
         if (!response.ok) throw new Error(data.error ?? "Unable to read this scanned PDF. Please retry.");
         if (typeof data.text !== "string" || !data.text.trim() || !Array.isArray(data.notes) || data.notes.some(note => typeof note !== "string")) throw new Error("The scan reader returned incomplete text. Please retry.");

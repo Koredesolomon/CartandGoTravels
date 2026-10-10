@@ -5,6 +5,7 @@ import { getConsularGuidance } from "@/lib/consularGuidance";
 import { MAX_ASSESSMENT_CHARS, MAX_ASSESSMENT_DOCUMENTS, REVIEW_PROMPT, REVIEW_LIMITS_PROMPT, DOCUMENT_EVIDENCE_PROMPT, VISA_CLASSES, documentPassages, finalizeReview, reviewSchema, validateReview, type AssessmentDocument } from "@/lib/consularReview";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
+import { enqueueConsularJob } from "@/lib/consularJobs";
 
 export const maxDuration = 600;
 const REVIEW_PASS_TIMEOUT_MS = 240_000;
@@ -126,11 +127,17 @@ export async function POST(request: NextRequest) {
   if (!apiKey || apiKey.startsWith("your-")) return json({ error: "The AI review is not configured. Add a valid ANTHROPIC_API_KEY to enable document assessment." }, 503);
   if (isRateLimited(access)) return json({ error: "Too many checks. Please wait a minute and try again." }, 429);
 
+  const work = (signal: AbortSignal) => runReview(country, visaClass, documents, context, apiKey, signal);
+  if (request.headers.get("prefer") === "respond-async") return enqueueConsularJob(access, 575_000, work);
+  return work(request.signal);
+}
+
+async function runReview(country: string, visaClass: string, documents: AssessmentDocument[], context: object, apiKey: string, requestSignal: AbortSignal) {
   let stage = "guidance";
   const requestId = randomUUID();
   const failure = (body: Record<string, unknown>, status: number) => json({ ...body, requestId }, status);
   const retryBudget = { remaining: 1 };
-  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(REVIEW_TOTAL_TIMEOUT_MS)]);
+  const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(REVIEW_TOTAL_TIMEOUT_MS)]);
   try {
     const guidance = await getConsularGuidance(country, visaClass);
     const schema = reviewSchema(guidance, documents);

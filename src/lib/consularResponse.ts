@@ -3,6 +3,7 @@ type ConsularResponse<T> = T & { error?: string; code?: string; requestId?: stri
 // Hosting proxies can return HTML before a request reaches the API route.
 // Keep that response out of document errors and report its HTTP status instead.
 export async function readConsularResponse<T extends object>(response: Response, service: "scan" | "review"): Promise<ConsularResponse<T>> {
+  if (response.status === 401 || response.status === 402) return { error: "Payment is required or your session has expired.", code: "access_required" } as ConsularResponse<T>;
   const text = await response.text();
   try {
     const data: unknown = JSON.parse(text);
@@ -13,7 +14,6 @@ export async function readConsularResponse<T extends object>(response: Response,
 
   const endpoint = service === "scan" ? "/api/document-ocr" : "/api/ai-consular-check";
   const reference = ` (${endpoint}, HTTP ${response.status})`;
-  if (response.status === 401 || response.status === 402) return { error: "Payment is required or your session has expired.", code: "access_required" } as ConsularResponse<T>;
   if (response.status === 408 || response.status === 504) return { error: `The ${service === "scan" ? "document reader" : "AI review"} timed out. Please retry.${reference}`, code: "review_timeout" } as ConsularResponse<T>;
 
   let error: string;

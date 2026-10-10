@@ -9,7 +9,7 @@ import { worldCountries } from "@/data/countries";
 import { ItineraryPlanner } from "@/components/itinerary/ItineraryPlanner";
 import { extractDocumentText } from "@/lib/documentText";
 import { AssessmentAccessError, readAssessmentFiles, validateAssessmentFiles } from "@/lib/assessmentFiles";
-import { readConsularResponse } from "@/lib/consularResponse";
+import { requestConsularResult } from "@/lib/consularRequest";
 import { MAX_ASSESSMENT_CHARS, type ConsularReport } from "@/lib/consularReview";
 import { AssessmentReport } from "@/components/consular/AssessmentReport";
 import { DocumentPdfDownload } from "@/components/consular/DocumentPdfDownload";
@@ -461,13 +461,12 @@ export function AiConsularCheckPage({
     try {
       const documents = documentMode === "upload" ? await readAssessmentFiles(assessmentFiles, controller.signal) : [{ id: "document-1", name: "Pasted document", text: documentText.trim() }];
       if (version !== assessmentVersion.current || controller.signal.aborted) return;
-      const response = await fetch("/api/ai-consular-check", {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+      const { response, data } = await requestConsularResult<{ report?: ConsularReport }>("review", {
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ country, visaClass, nationality, residence, routeDetails, documents }),
-      });
+      }, controller.signal);
       if (version !== assessmentVersion.current) return;
       if (response.status === 401 || response.status === 402) { setUnlocked(false); setShowPaymentPrompt(true); return; }
-      const data = await readConsularResponse<{ report?: ConsularReport }>(response, "review");
       if (version !== assessmentVersion.current || controller.signal.aborted) return;
       if (!response.ok || !data.report) {
         const reference = response.status !== 504 && typeof data.requestId === "string" && /^[a-f0-9-]{36}$/.test(data.requestId) ? ` Reference: ${data.requestId}` : "";
