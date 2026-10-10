@@ -1,5 +1,5 @@
 import { ACCESS_COOKIE } from "@/lib/payment";
-import { getConsularAccessRef } from "@/lib/consularAccess";
+import { getConsularAccessRef, isConsularPaymentRequired } from "@/lib/consularAccess";
 import { AboutPage } from "@/components/pages/AboutPage";
 import { AiConsularCheckPage } from "@/components/pages/AiConsularCheckPage";
 import { ContactPage } from "@/components/pages/ContactPage";
@@ -74,7 +74,8 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
 
   if (slug === "ai-consular-check") {
     const cookieStore = await cookies();
-    const initialUnlocked = Boolean(getConsularAccessRef(cookieStore.get(ACCESS_COOKIE)?.value));
+    const paymentRequired = isConsularPaymentRequired();
+    const initialUnlocked = !paymentRequired || Boolean(getConsularAccessRef(cookieStore.get(ACCESS_COOKIE)?.value));
     const query = await searchParams;
     const paymentStatus = query?.payment === "success" || query?.payment === "failed" ? query.payment : undefined;
 
@@ -82,6 +83,7 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
     const configuredCurrency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
     return (
       <AiConsularCheckPage
+        paymentRequired={paymentRequired}
         initialUnlocked={initialUnlocked}
         paymentStatus={paymentStatus}
         paymentAmount={Number.isFinite(configuredAmount) && configuredAmount > 0 ? configuredAmount : 49.99}

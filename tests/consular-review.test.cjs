@@ -19,12 +19,13 @@ function load(relative) {
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }
-const { validateReview, finalizeReview, CRITERIA, MAX_ASSESSMENT_CHARS, officialExcerpts, documentPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
+const { validateReview, finalizeReview, CRITERIA, MAX_ASSESSMENT_CHARS, officialExcerpts, documentPassages, proofreadingPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
+const { createSourceMatcher, recoverPassage } = load('src/lib/consularSource.ts');
 const { officialPageText, getConsularGuidance } = load('src/lib/consularGuidance.ts');
 const { POST } = load('src/app/api/ai-consular-check/route.ts');
 const { signToken, ACCESS_COOKIE } = load('src/lib/payment.ts');
 const { NextRequest } = require('next/server');
-Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'synthetic-test-secret-more-than-32-characters', ANTHROPIC_API_KEY: 'synthetic-test-key', NODE_ENV: 'test' });
+Object.assign(process.env, { CONSULAR_PAYMENT_REQUIRED: 'true', PAYMENT_SESSION_SECRET: 'synthetic-test-secret-more-than-32-characters', ANTHROPIC_API_KEY: 'synthetic-test-key', NODE_ENV: 'test' });
 const docs = [{ id: 'document-1', name: 'Purpose.txt', text: 'I plans to visit London from 10 July to 20 July 2027. I will pay GBP 2000 from savings.' }, { id: 'document-2', name: 'Bank.txt', text: 'Account holder: Synthetic Applicant. Closing balance: GBP 5000 on 1 June 2027.' }];
 const source = { id: 'source-1', title: 'Official visitor guidance', url: 'https://www.gov.uk/standard-visitor', retrievedAt: '2026-10-09T12:00:00Z', text: 'You must have enough money to support yourself during your trip.' };
 source.excerpts = officialExcerpts(source.id, source.text);
@@ -36,6 +37,7 @@ function fixture() {
     criteria: Object.keys(CRITERIA).map(key => ({ key, status: key === 'ties' ? 'not_assessable' : 'partial', reason: 'Some evidence is supplied; further context is needed.', evidence: key === 'ties' ? [] : [{ documentId: key === 'finances' ? 'document-2' : 'document-1', quote: key === 'finances' ? 'Closing balance: GBP 5000' : 'I plans to visit London' }], policyEvidence: [] })),
     findings: [{ type: 'weak', title: 'Incomplete financial picture', body: 'Source-of-funds evidence was not supplied.', evidence: [{ documentId: 'document-2', quote: 'Closing balance: GBP 5000' }], policyEvidence: [{ sourceId: 'source-1', excerptId: 'source-1-passage-1' }] }],
     proofreading: [{ documentId: 'document-1', original: 'I plans to visit London', suggested: 'I plan to visit London', explanation: 'Correct subject-verb agreement without changing facts.' }],
+    suggestedAdditions: [],
     missingEvidence: ['Evidence of source of savings was not supplied.'], questions: ['What is your country of residence?'], roadmap: ['Clarify your circumstances.', 'Check the dates across your application.', 'Obtain a human review before submission.'], limitations: ['Only supplied text was reviewed.'],
   };
 }
@@ -98,6 +100,7 @@ test('readiness is computed from criterion evidence, never accepted from model-p
 test('proofreading preserves amounts, dates, currency, negations and commitments instead of fabricating evidence', () => {
   assert.equal(proofreadingPreservesFacts('My annual salary is GBP 30000.', 'My annual salary is GBP 30,000.'), true);
   assert.equal(proofreadingPreservesFacts('I plans to visit London.', 'I plan to visit London.'), true);
+  assert.equal(proofreadingPreservesFacts('I plans to visit London.', 'Travel to London is planned.'), true);
   for (const [original, suggested] of [
     ['Bank statements are not included.', 'Bank statements will be submitted.'],
     ['I may return after the visit.', 'I will return after the visit.'],
@@ -105,6 +108,7 @@ test('proofreading preserves amounts, dates, currency, negations and commitments
     ['Trip: 10 July 2027.', 'Trip: 10 August 2027.'],
     ['Funds: GBP 5000.', 'Funds: USD 5000.'],
     ['I plan to visit London.', 'I plan to visit Paris.'],
+    ['I plan to visit London.', 'I plan to visit.'],
     ['Passport number: A1234567.', 'Passport number: A1234568.'],
     ['I have no previous visa refusals.', 'I have previous visa refusals.'],
   ]) assert.equal(proofreadingPreservesFacts(original, suggested), false);
@@ -159,6 +163,220 @@ test('document evidence resolves original passages without AI copying and reject
   const chunks = documentPassages([{ ...docs[0], text: longText }]);
   assert.equal(chunks.map(chunk => chunk.quote).join(' '), longText);
   assert.ok(chunks.every(chunk => chunk.quote.length >= 8 && chunk.quote.length <= 400 && longText.includes(chunk.quote)));
+});
+
+test('proofreading originals come from source passages and invented or mismatched references remain invalid', () => {
+  const schema = reviewSchema(guidance, docs).properties.proofreading.items.properties;
+  assert.deepEqual(schema.documentId.enum, docs.map(doc => doc.id));
+  assert.deepEqual(schema.excerptId.enum, proofreadingPassages(docs).map(passage => passage.excerptId));
+  assert.equal(schema.original, undefined, 'The provider cannot generate the original wording');
+  const correction = { documentId: 'document-1', excerptId: 'document-1-paragraph-1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement without changing the other wording.' };
+  const draft = fixture(); draft.proofreading = [correction];
+  const parsed = validateReview(draft, docs, guidance);
+  assert.equal(parsed.proofreading[0].original, docs[0].text);
+  assert.equal(parsed.proofreading[0].suggested, correction.suggested);
+  assert.equal(parsed.proofreading[0].excerptId, undefined);
+  for (const invalid of [
+    { ...correction, excerptId: 'invented-passage' },
+    { ...correction, excerptId: 'document-2-passage-1' },
+    { ...correction, documentId: 'unknown-document' },
+    { ...correction, original: 'An invented original quotation' },
+  ]) {
+    draft.proofreading = [invalid];
+    assert.throws(() => validateReview(draft, docs, guidance));
+  }
+  for (const suggested of [correction.suggested.replace('2000', '3000'), 'I plan to visit London']) {
+    draft.proofreading = [{ ...correction, suggested }];
+    const withheld = validateReview(draft, docs, guidance);
+    assert.equal(withheld.proofreading.length, 0, 'A source reference cannot bypass preservation of facts');
+    assert.ok(withheld.limitations.some(item => item.includes('withheld')));
+  }
+});
+
+test('source recovery returns actual document characters and never guesses changed facts or a different document', () => {
+  const raw = 'A cafe\u0301\n\tclause: NGN 2,500,000 remains unchanged.';
+  assert.equal(createSourceMatcher(raw)('A café clause: NGN 2,500,000'), 'A cafe\u0301\n\tclause: NGN 2,500,000');
+  assert.equal(createSourceMatcher(raw)('A café clause: NGN 3,500,000'), null);
+  assert.equal(createSourceMatcher(raw)('A café clause: NGN ... remains unchanged.'), null);
+  assert.equal(recoverPassage([{ excerptId: 'a-b-passage-1' }, { excerptId: 'ab-passage-1' }], 'AB_PASSAGE_1'), undefined, 'Ambiguous recovery is refused');
+  const draft = fixture();
+  draft.findings[0].evidence = [{ documentId: docs[0].id, excerptId: 'DOCUMENT_1_PASSAGE_1' }];
+  draft.proofreading = [{ documentId: docs[0].id, excerptId: 'DOCUMENT_1_PARAGRAPH_1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct grammar.' }];
+  const recovered = validateReview(draft, docs, guidance);
+  assert.equal(recovered.findings[0].evidence[0].quote, docs[0].text);
+  assert.equal(recovered.proofreading[0].original, docs[0].text);
+  draft.findings[0].evidence = [{ documentId: docs[0].id, excerptId: 'wrong-reference', quote: 'I plans\n to visit London' }];
+  assert.equal(validateReview(draft, docs, guidance).findings[0].evidence[0].quote, 'I plans to visit London');
+  draft.findings[0].evidence = [{ documentId: docs[1].id, excerptId: 'wrong-reference', quote: 'I plans to visit London' }];
+  assert.throws(() => validateReview(draft, docs, guidance), /Unsupported/);
+});
+
+test('long legal paragraphs allow newly worded corrections while protecting facts and legal terms', () => {
+  const clause = 'The vendor have assigned Plot 17 in Lagos for NGN 2,500,000 on 12 March 2026. ' + 'The parties agree that this clause records the assignment and its terms. '.repeat(24).trim();
+  const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: clause + '\n\nThe parties shall retain the signed copies.' };
+  const documents = [...docs, deed];
+  const draft = fixture();
+  draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Property evidence, with execution unverified.' });
+  const replacement = clause.replace('vendor have', 'vendor has').replace('records the assignment and its terms', 'sets out the assignment and its terms');
+  draft.proofreading = [{ documentId: deed.id, excerptId: `${deed.id}-paragraph-1`, suggested: replacement, explanation: 'Improve grammar and clarity without changing the terms.' }];
+  const parsed = validateReview(draft, documents, guidance);
+  assert.ok(replacement.length > 600);
+  assert.equal(parsed.proofreading[0].original, clause);
+  assert.equal(parsed.proofreading[0].suggested, replacement);
+  assert.ok(!deed.text.includes(replacement), 'Proposed wording is not required to exist in the document');
+  assert.equal(parsed.proofreading[0].requiresLegalReview, true);
+  assert.ok(proofreadingPassages(documents).every(passage => passage.quote.length <= 4000 && documents.find(doc => doc.id === passage.documentId).text.includes(passage.quote)));
+  for (const unsafe of [replacement.replace('2,500,000', '3,500,000'), replacement.replace('assigned', 'irrevocably assigned'), replacement.replace('agree', 'agree and shall indemnify the buyer')]) {
+    draft.proofreading[0].suggested = unsafe;
+    const withheld = validateReview(draft, documents, guidance);
+    assert.equal(withheld.proofreading.length, 0);
+    assert.equal(withheld.verificationIssues[0].code, 'unsafe_wording');
+  }
+});
+
+test('suggested additions have no invented original and unknown facts must remain placeholders', () => {
+  const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: 'The vendor assigns Plot 17 in Lagos to the purchaser.' };
+  const documents = [...docs, deed];
+  const draft = fixture();
+  draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Property evidence.' });
+  const addition = { documentId: deed.id, title: 'Possible dispute clause', proposedText: 'The parties shall resolve disputes through [agreed mechanism] under [applicable law, subject to legal review].', rationale: 'A possible addition for the parties and their legal reviewer to consider; no mandatory clause is asserted.', insertionPoint: 'Before the signature section, if the parties and legal reviewer agree.' };
+  draft.suggestedAdditions = [addition];
+  const parsed = validateReview(draft, documents, guidance);
+  assert.equal(parsed.suggestedAdditions[0].original, undefined);
+  assert.equal(parsed.suggestedAdditions[0].excerptId, undefined);
+  assert.equal(parsed.suggestedAdditions[0].proposedText, addition.proposedText);
+  assert.equal(parsed.suggestedAdditions[0].requiresLegalReview, true);
+  assert.equal(parsed.proofreading.length, 1, 'An addition does not replace an existing correction');
+  for (const proposedText of ['The parties shall resolve disputes before 31 December 2030.', 'The vendor is Alice Johnson.', 'The deed is authenticated and the property has clear title.']) {
+    draft.suggestedAdditions = [{ ...addition, proposedText }];
+    const withheld = validateReview(draft, documents, guidance);
+    assert.equal(withheld.suggestedAdditions.length, 0);
+    assert.equal(withheld.verificationIssues[0].item, 'addition');
+  }
+  draft.suggestedAdditions = [{ ...addition, original: 'An invented clause' }, addition];
+  const flagged = validateReview(draft, documents, guidance, { recoverItems: true });
+  assert.equal(flagged.suggestedAdditions.length, 1);
+  assert.equal(flagged.verificationIssues[0].index, 0);
+  draft.suggestedAdditions = [{ ...addition, documentId: docs[1].id }];
+  assert.equal(validateReview(draft, documents, guidance).suggestedAdditions.length, 0, 'Issuer-controlled bank records cannot receive additions');
+});
+
+test('unverified items are isolated and aggregate claims depending on them are withheld', () => {
+  const draft = fixture();
+  draft.criteria.forEach(item => { item.status = 'supported'; item.evidence = [{ documentId: docs[0].id, quote: 'I plans to visit London' }]; });
+  const good = structuredClone(draft.findings[0]);
+  draft.findings.unshift({ ...good, type: 'risk', title: 'Unsupported allegation', body: 'An unsupported adverse conclusion.', evidence: [{ documentId: docs[1].id, quote: 'Invented adverse fact' }] });
+  draft.proofreading.unshift({ ...draft.proofreading[0], original: 'A fabricated original sentence' });
+  draft.summary = 'An unsupported adverse conclusion determines readiness.';
+  draft.roadmap[0] = 'Act on the unsupported adverse conclusion.';
+  draft.questions[0] = 'Explain the unsupported adverse conclusion.';
+  draft.missingEvidence[0] = 'Resolve the unsupported adverse conclusion.';
+  draft.limitations[0] = 'The unsupported adverse conclusion is confirmed.';
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true });
+  assert.equal(parsed.findings.length, 1);
+  assert.deepEqual(parsed.findings[0].evidence, [{ documentId: docs[1].id, quote: 'Closing balance: GBP 5000' }]);
+  assert.equal(parsed.proofreading.length, 1);
+  assert.deepEqual(parsed.verificationIssues.map(issue => [issue.item, issue.index]), [['finding', 0], ['correction', 0]]);
+  const report = finalizeReview(parsed, guidance, docs);
+  assert.equal(report.score, null);
+  assert.match(report.statusLabel, /Partial review/);
+  assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
+  assert.ok(report.criteria.every(item => item.evidence.length === 1), 'Verified source observations remain available');
+  assert.ok(!JSON.stringify(report).includes('unsupported adverse conclusion'));
+  assert.equal(report.questions.length, 0);
+  assert.equal(report.missingEvidence.length, 0);
+});
+
+test('unsupported criterion and official citation affect their items and leave other observations intact', () => {
+  const draft = fixture();
+  draft.criteria[0].evidence[0].quote = 'Nonexistent purpose wording';
+  draft.findings.push({ ...structuredClone(draft.findings[0]), policyEvidence: [{ sourceId: source.id, excerptId: 'nonexistent-policy' }] });
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true });
+  assert.equal(parsed.criteria[0].status, 'not_assessable');
+  assert.equal(parsed.criteria[0].evidence.length, 0);
+  assert.equal(parsed.criteria[1].status, 'partial');
+  assert.equal(parsed.findings.length, 1);
+  assert.equal(parsed.proofreading.length, 1);
+  assert.deepEqual(parsed.verificationIssues.map(issue => [issue.item, issue.index]), [['criterion', 0], ['finding', 1]]);
+});
+
+test('source recovery cannot conceal malformed entries or oversized nested lists', () => {
+  for (const mutate of [
+    draft => { draft.findings[0].evidence.push({ documentId: docs[1].id, quote: '' }); },
+    draft => { draft.findings[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); },
+    draft => { draft.findings.push({ ...draft.findings[0], type: 'invalid' }); },
+    draft => { draft.suggestedAdditions = Array(9).fill({}); },
+  ]) {
+    const draft = fixture(); draft.findings[0].evidence[0].quote = 'Nonexistent source text'; mutate(draft);
+    assert.throws(() => validateReview(draft, docs, guidance, { recoverItems: true }));
+  }
+});
+
+test('API returns a partial report for a persistent bad quotation while retaining good observations', async () => {
+  const original = global.fetch;
+  let calls = 0;
+  global.fetch = async url => {
+    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
+    calls++;
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+    draft.findings.push({ ...structuredClone(draft.findings[0]), title: 'Unverified item', evidence: [{ documentId: docs[1].id, quote: 'Fabricated financial quotation' }] });
+    draft.summary = 'A summary depending on the fabricated financial quotation.';
+    return providerResponse(draft);
+  };
+  try {
+    const response = await POST(request(payload));
+    assert.equal(response.status, 200);
+    assert.equal(calls, 2, 'A bad item does not cause another full report regeneration');
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    const { report } = await response.json();
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.proofreading.length, 1);
+    assert.equal(report.verificationIssues[0].index, 1);
+    assert.equal(report.score, null);
+    assert.ok(!JSON.stringify(report).includes('Fabricated financial quotation'));
+    assert.match(report.summary, /withheld/);
+  } finally { global.fetch = original; }
+});
+
+test('a scanned deed, funds proof and SOP complete review with exact source-bound proofreading originals', async () => {
+  const deed = { id: 'document-3', name: 'Deed of assignment.pdf', extraction: 'ocr', ocrNotes: ['Visible signature is unverified.'], text: '[Page 1]\nDEED OF ASSIGNMENT\nThe vendor have assigned Plot 17 in Lagos for NGN 2,500,000 on 12 March 2026.\n[Signature mark; signer and authenticity unverified]' };
+  const documents = [...docs, deed];
+  const original = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
+    assert.equal(url, 'https://api.anthropic.com/v1/messages');
+    const body = JSON.parse(options.body); calls.push(body);
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+    draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Supplied property evidence; authenticity and execution are unverified.' });
+    for (const item of [...draft.criteria, ...draft.findings]) item.evidence = item.evidence.map(evidence => ({ documentId: evidence.documentId, excerptId: `${evidence.documentId}-passage-1` }));
+    draft.proofreading = [
+      { documentId: docs[0].id, excerptId: `${docs[0].id}-paragraph-1`, suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement.' },
+      { documentId: deed.id, excerptId: `${deed.id}-paragraph-1`, suggested: deed.text.replace('vendor have', 'vendor has'), explanation: 'Flag subject-verb agreement for the document issuer; preserve facts and the signature annotation.' },
+    ];
+    return providerResponse(draft);
+  };
+  try {
+    const response = await POST(request({ ...payload, documents }));
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 2, 'No repair is needed to copy an original quotation');
+    for (const call of calls) {
+      assert.ok(call.messages[0].content.includes(deed.text.replace(/\n/g, '\\n')), 'Both passes receive the complete extracted deed');
+      assert.equal(call.output_config.format.schema.properties.proofreading.items.properties.original, undefined);
+      assert.ok(call.messages[0].content.includes('proofreadingCatalogue'));
+      assert.match(call.system, /do not generate an original field/i);
+    }
+    const { report } = await response.json();
+    assert.deepEqual(report.documents.map(document => document.id), documents.map(document => document.id));
+    assert.equal(report.proofreading.length, 2);
+    assert.equal(report.proofreading[1].original, deed.text);
+    assert.equal(report.proofreading[1].suggested, deed.text.replace('vendor have', 'vendor has'));
+    assert.equal(report.proofreading[1].requiresLegalReview, true);
+    assert.equal(report.score, null, 'An unchecked scan still cannot receive a readiness score');
+    assert.ok(report.limitations.some(item => item.includes('Visible signature is unverified')));
+    const altered = fixture(); altered.documents.push(report.documents[2]); altered.proofreading = [{ documentId: deed.id, excerptId: `${deed.id}-passage-1`, suggested: deed.text.replace('vendor have', 'vendor has').replace('[Signature mark; signer and authenticity unverified]', '[Signature verified]'), explanation: 'Attempted signature rewrite.' }];
+    assert.equal(validateReview(altered, documents, guidance).proofreading.length, 0, 'Signature annotations cannot be rewritten');
+  } finally { global.fetch = original; }
 });
 
 test('both provider passes receive complete documents and a passage catalogue, and returned reports contain exact resolved quotations', async () => {
@@ -306,17 +524,17 @@ test('pre-assessment accepts the 60,000-character boundary without truncating ei
   } finally { global.fetch = original; }
 });
 
-test('failed, truncated and fabricated AI reports never become fallback scores or leak provider errors', async () => {
+test('failed, truncated and malformed AI reports never become fallback scores or leak provider errors', async () => {
   const original = global.fetch;
   try {
-    for (const mode of ['unavailable', 'truncated', 'fabricated', 'invalid-json', 'timeout']) {
+    for (const mode of ['unavailable', 'truncated', 'malformed', 'invalid-json', 'timeout']) {
       global.fetch = async url => {
         if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
         if (mode === 'timeout') throw new DOMException('secret timeout detail', 'TimeoutError');
         if (mode === 'unavailable') return Response.json({ error: { message: 'secret provider detail' } }, { status: 401 });
         if (mode === 'truncated') return providerResponse(fixture(), 'max_tokens');
         if (mode === 'invalid-json') return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] });
-        const draft = fixture(); draft.findings[0].evidence[0].quote = 'Completely fabricated financial evidence';
+        const draft = fixture(); draft.criteria.pop();
         return providerResponse(draft);
       };
       const response = await POST(request(payload));
@@ -324,7 +542,7 @@ test('failed, truncated and fabricated AI reports never become fallback scores o
       const body = await response.json();
       assert.equal(body.report, undefined);
       assert.match(body.requestId, /^[a-f0-9-]{36}$/);
-      assert.equal(body.code, mode === 'unavailable' ? 'provider_unavailable' : mode === 'timeout' ? 'review_timeout' : mode === 'fabricated' ? 'report_validation_failed' : 'review_incomplete');
+      assert.equal(body.code, mode === 'unavailable' ? 'provider_unavailable' : mode === 'timeout' ? 'review_timeout' : mode === 'malformed' ? 'report_validation_failed' : 'review_incomplete');
       assert.ok(!JSON.stringify(body).includes('secret provider detail'));
       assert.ok(!JSON.stringify(body).includes('secret timeout detail'));
       if (mode === 'timeout') {
@@ -380,21 +598,27 @@ test('the output-limit retry budget is shared across passes and refusals are not
   } finally { global.fetch = original; }
 });
 
-test('an invalid verification report gets one repair attempt and only corrected evidence is returned', async () => {
+test('an unresolved correction reference is flagged without regenerating other verified observations', async () => {
   const original = global.fetch;
   let calls = 0;
   global.fetch = async url => {
     if (url.startsWith('https://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
     calls++;
     const draft = fixture();
-    if (calls === 2) draft.proofreading[0].original = 'An invented sentence that is not supplied';
+    draft.proofreading = [{ documentId: 'document-1', excerptId: calls === 2 ? 'document-2-passage-1' : 'document-1-passage-1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement without changing facts.' }];
     return providerResponse(draft);
   };
   try {
     const response = await POST(request(payload));
     assert.equal(response.status, 200);
-    assert.equal(calls, 3);
-    assert.equal((await response.json()).report.proofreading[0].original, 'I plans to visit London');
+    assert.equal(calls, 2);
+    const { report } = await response.json();
+    assert.equal(report.proofreading.length, 0);
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.verificationIssues[0].item, 'correction');
+    assert.equal(report.verificationIssues[0].code, 'source_unverified');
+    assert.equal(report.score, null);
+    assert.equal(report.criteria.find(item => item.key === 'writing').status, 'not_assessable');
   } finally { global.fetch = original; }
 });
 

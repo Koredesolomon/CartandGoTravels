@@ -10,8 +10,8 @@ if (process.argv[2] === "--report" && process.argv[3]) {
   const endpoint = new URL("/api/ai-consular-check", process.env.CONSULAR_EVAL_URL ?? "http://localhost:3000");
   if (!["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname)) throw new Error("Run the evaluation against a local development server.");
   const accessToken = process.env.CONSULAR_EVAL_ACCESS_TOKEN;
-  if (!accessToken || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) throw new Error("Set CONSULAR_EVAL_ACCESS_TOKEN to the ai_consular_access cookie value from a valid paid session, or validate an existing report with --report <path>.");
-  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", Cookie: `ai_consular_access=${accessToken}` }, body: JSON.stringify(fixture), signal: AbortSignal.timeout(560_000) });
+  if (accessToken && !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(accessToken)) throw new Error("CONSULAR_EVAL_ACCESS_TOKEN must be a signed access cookie value when supplied.");
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", ...(accessToken ? { Cookie: `ai_consular_access=${accessToken}` } : {}) }, body: JSON.stringify(fixture), signal: AbortSignal.timeout(560_000) });
   result = await response.json();
   assert.equal(response.status, 200, result.error ?? "The live review failed.");
 }

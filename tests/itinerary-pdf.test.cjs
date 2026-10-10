@@ -29,6 +29,7 @@ const { createItineraryPdf } = load('src/lib/itineraryPdf.ts');
 const { POST } = load('src/app/api/itinerary-pdf/route.ts');
 const { signToken, ACCESS_COOKIE } = load('src/lib/payment.ts');
 process.env.PAYMENT_SESSION_SECRET = 'test-secret-that-is-more-than-32-characters';
+process.env.CONSULAR_PAYMENT_REQUIRED = 'true';
 
 function fixture(days = '3') {
   const city = itineraryCities[0];
@@ -131,6 +132,22 @@ test('PDF route requires paid access, validates payload size and returns a priva
   assert.match(response.headers.get('content-disposition'), /attachment; filename="Flight-Accommodation-Itinerary-Qatar-2026-11-09.pdf"/);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
   assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+});
+
+test('free local mode exports an itinerary without a payment cookie or signing secret', async () => {
+  const saved = { CONSULAR_PAYMENT_REQUIRED: process.env.CONSULAR_PAYMENT_REQUIRED, PAYMENT_SESSION_SECRET: process.env.PAYMENT_SESSION_SECRET, NODE_ENV: process.env.NODE_ENV };
+  try {
+    delete process.env.CONSULAR_PAYMENT_REQUIRED;
+    delete process.env.PAYMENT_SESSION_SECRET;
+    process.env.NODE_ENV = 'development';
+    const response = await POST(await req(fixture(), false));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/pdf');
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.equal(Buffer.from(await response.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });
 
 test('PDF requires paid access on every host even with the retired preview flag', async () => {

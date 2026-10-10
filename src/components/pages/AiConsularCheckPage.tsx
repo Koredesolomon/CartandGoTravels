@@ -307,20 +307,22 @@ function flagClass(type: Flag["type"]) {
 }
 
 export function AiConsularCheckPage({
+  paymentRequired = false,
   initialUnlocked = false,
   paymentStatus,
   paymentAmount = 49.99,
   paymentCurrency = "USD",
 }: {
+  paymentRequired?: boolean;
   initialUnlocked?: boolean;
   paymentStatus?: "success" | "failed";
   paymentAmount?: number;
   paymentCurrency?: string;
 }) {
-  const paymentFailed = paymentStatus === "failed";
-  const paymentSucceeded = initialUnlocked && paymentStatus === "success";
+  const paymentFailed = paymentRequired && paymentStatus === "failed";
+  const paymentSucceeded = paymentRequired && initialUnlocked && paymentStatus === "success";
   const price = `${paymentAmount.toFixed(2)} ${paymentCurrency}`;
-  const [unlocked, setUnlocked] = useState(initialUnlocked);
+  const [unlocked, setUnlocked] = useState(!paymentRequired || initialUnlocked);
   const [paymentEmail, setPaymentEmail] = useState("");
   const [paymentError, setPaymentError] = useState("");
   const [isStartingPayment, setIsStartingPayment] = useState(false);
@@ -372,6 +374,7 @@ export function AiConsularCheckPage({
   const [answerDraft, setAnswerDraft] = useState("");
 
   useEffect(() => {
+    if (!paymentRequired) return;
     const channel = typeof BroadcastChannel !== "undefined"
       ? new BroadcastChannel("cartandgo-consular-payment") : null;
     let controller: AbortController | null = null;
@@ -419,7 +422,7 @@ export function AiConsularCheckPage({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [unlocked, paymentSucceeded]);
+  }, [unlocked, paymentSucceeded, paymentRequired]);
 
   const categoryInterviewSets = interviewSets[interviewCategory] as Record<
     string,
@@ -466,7 +469,10 @@ export function AiConsularCheckPage({
         body: JSON.stringify({ country, visaClass, nationality, residence, routeDetails, documents }),
       }, controller.signal);
       if (version !== assessmentVersion.current) return;
-      if (response.status === 401 || response.status === 402) { setUnlocked(false); setShowPaymentPrompt(true); return; }
+      if (response.status === 401 || response.status === 402) {
+        if (!paymentRequired) throw new Error("Your document session could not be resumed. Please reload the page and retry.");
+        setUnlocked(false); setShowPaymentPrompt(true); return;
+      }
       if (version !== assessmentVersion.current || controller.signal.aborted) return;
       if (!response.ok || !data.report) {
         const reference = response.status !== 504 && typeof data.requestId === "string" && /^[a-f0-9-]{36}$/.test(data.requestId) ? ` Reference: ${data.requestId}` : "";
@@ -475,7 +481,10 @@ export function AiConsularCheckPage({
       setAnalysis(data.report);
     } catch (error) {
       if (version !== assessmentVersion.current || controller.signal.aborted) return;
-      if (error instanceof AssessmentAccessError) { setUnlocked(false); setShowPaymentPrompt(true); return; }
+      if (error instanceof AssessmentAccessError) {
+        if (!paymentRequired) { setAssessmentError("Your document session could not be resumed. Please reload the page and retry."); return; }
+        setUnlocked(false); setShowPaymentPrompt(true); return;
+      }
       setAnalysis(null);
       setAssessmentError(error instanceof Error ? error.message : "The AI review could not be completed. Please retry.");
     } finally {
@@ -544,6 +553,7 @@ export function AiConsularCheckPage({
 
   async function startPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!paymentRequired) return;
     if (checkoutPending.current) return;
     const paymentTab = window.open("about:blank", "_blank");
     if (!paymentTab) {
@@ -719,8 +729,8 @@ export function AiConsularCheckPage({
               ))}
             </div>
             <p className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#5b6870]">
-              Private readiness tools only. Nothing is submitted to an embassy, and
-              payments are processed securely by Flutterwave.
+              Private readiness tools only. Nothing is submitted to an embassy.
+              {paymentRequired ? " Payments are processed securely by Flutterwave." : " All tools are currently available without payment."}
             </p>
           </div>
         </div>
@@ -782,7 +792,7 @@ export function AiConsularCheckPage({
           ) : (
             <>
               <div className="mb-6 rounded-md border border-[#0098ba] bg-[#e8f6fb] px-4 py-3 text-sm font-bold text-[#0f5e68]">
-                ✓ Unlocked for this session. All 7 tools below are available.
+                {paymentRequired ? "✓ Unlocked for this session. All 7 tools below are available." : "✓ All 7 tools are available. No payment required."}
               </div>
 
               <div className="mb-8 flex flex-wrap gap-2 border-b border-[#d7dfe5] pb-4">
@@ -1170,7 +1180,7 @@ export function AiConsularCheckPage({
         </div>
       </section>
 
-      {showPaymentPrompt ? (
+      {paymentRequired && showPaymentPrompt ? (
         <div
           className="fixed inset-0 z-[90] flex items-center justify-center bg-[#07141a]/70 px-5 py-8"
           role="dialog"

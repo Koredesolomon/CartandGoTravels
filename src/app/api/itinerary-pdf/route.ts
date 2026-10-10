@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ACCESS_COOKIE } from "@/lib/payment";
-import { getConsularAccessRef } from "@/lib/consularAccess";
+import { getConsularRequestAccess, withConsularSession } from "@/lib/consularAccess";
 import { validateItineraryExport } from "@/lib/itineraryExport";
 import { createItineraryPdf } from "@/lib/itineraryPdf";
 import { validateSupportingDocuments } from "@/lib/itinerarySupportingDocuments";
@@ -10,7 +9,8 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = MAX_SUPPORT_TOTAL_BYTES + 512 * 1024;
 
 export async function POST(request: NextRequest) {
-  if (!getConsularAccessRef(request.cookies.get(ACCESS_COOKIE)?.value)) return NextResponse.json({ error: "Unlock AI Consular to download your itinerary." }, { status: 402 });
+  const access = getConsularRequestAccess(request);
+  if (!access) return NextResponse.json({ error: "Unlock AI Consular to download your itinerary." }, { status: 402 });
   if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) return NextResponse.json({ error: "This itinerary is too large to export." }, { status: 413 });
   const reader = request.body?.getReader();
   if (!reader) return NextResponse.json({ error: "Provide an itinerary to export." }, { status: 400 });
@@ -42,12 +42,12 @@ export async function POST(request: NextRequest) {
   try {
     const bytes = await createItineraryPdf(input, documents);
     const destination = input.plan.details.destination.replace(/[^a-z0-9]+/gi, "-");
-    return new NextResponse(new Uint8Array(bytes), { headers: {
+    return withConsularSession(new NextResponse(new Uint8Array(bytes), { headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="Flight-Accommodation-Itinerary-${destination}-${input.plan.details.start}.pdf"`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
-    } });
+    } }), access);
   } catch {
     // Do not log traveler identity, passport numbers or their schedule.
     return NextResponse.json({ error: "Unable to prepare the PDF. Please try again." }, { status: 500 });

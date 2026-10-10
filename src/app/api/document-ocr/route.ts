@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
-import { ACCESS_COOKIE } from "@/lib/payment";
-import { getConsularAccessRef } from "@/lib/consularAccess";
+import { getConsularRequestAccess, withConsularSession } from "@/lib/consularAccess";
 import { MAX_FILE_BYTES } from "@/lib/documentText";
 import { OCR_PROMPT, OCR_SCHEMA, validateOcrResult } from "@/lib/documentOcr";
 import { enqueueConsularJob } from "@/lib/consularJobs";
@@ -46,16 +45,16 @@ async function readPdf(request: NextRequest) {
   return { bytes, pageCount };
 }
 export async function POST(request: NextRequest) {
-  const access = getConsularAccessRef(request.cookies.get(ACCESS_COOKIE)?.value);
+  const access = getConsularRequestAccess(request);
   if (!access) return json({ error: "Payment is required or your session has expired." }, 402);
-  if (isRateLimited(access)) return json({ error: "Too many scan requests. Please wait a minute and try again." }, 429);
+  if (isRateLimited(access.ref)) return json({ error: "Too many scan requests. Please wait a minute and try again." }, 429);
   let input: Awaited<ReturnType<typeof readPdf>>;
   try { input = await readPdf(request); }
   catch (error) { return json({ error: error instanceof InputError ? error.message : "Unable to read this PDF." }, error instanceof InputError ? error.status : 400); }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey.startsWith("your-")) return json({ error: "Scanned PDF reading needs a valid ANTHROPIC_API_KEY on the server." }, 503);
-  if (request.headers.get("prefer") === "respond-async") return enqueueConsularJob(access, 280_000, signal => transcribe(input, apiKey, signal));
-  return transcribe(input, apiKey, request.signal);
+  if (request.headers.get("prefer") === "respond-async") return withConsularSession(enqueueConsularJob(access.ref, 280_000, signal => transcribe(input, apiKey, signal)), access);
+  return withConsularSession(await transcribe(input, apiKey, request.signal), access);
 }
 
 async function transcribe(input: Awaited<ReturnType<typeof readPdf>>, apiKey: string, signal: AbortSignal) {

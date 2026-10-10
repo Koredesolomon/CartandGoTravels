@@ -1,8 +1,7 @@
-import { ACCESS_COOKIE } from "@/lib/payment";
-import { getConsularAccessRef } from "@/lib/consularAccess";
+import { getConsularRequestAccess, withConsularSession } from "@/lib/consularAccess";
 import { worldCountries } from "@/data/countries";
 import { getConsularGuidance } from "@/lib/consularGuidance";
-import { MAX_ASSESSMENT_CHARS, MAX_ASSESSMENT_DOCUMENTS, REVIEW_PROMPT, REVIEW_LIMITS_PROMPT, DOCUMENT_EVIDENCE_PROMPT, VISA_CLASSES, documentPassages, finalizeReview, reviewSchema, validateReview, type AssessmentDocument } from "@/lib/consularReview";
+import { MAX_ASSESSMENT_CHARS, MAX_ASSESSMENT_DOCUMENTS, REVIEW_PROMPT, REVIEW_LIMITS_PROMPT, DOCUMENT_EVIDENCE_PROMPT, VISA_CLASSES, documentPassages, proofreadingPassages, finalizeReview, reviewSchema, validateReview, type AssessmentDocument } from "@/lib/consularReview";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { enqueueConsularJob } from "@/lib/consularJobs";
@@ -109,7 +108,7 @@ async function review(apiKey: string, content: string, signal: AbortSignal, sche
 }
 
 export async function POST(request: NextRequest) {
-  const access = getConsularAccessRef(request.cookies.get(ACCESS_COOKIE)?.value);
+  const access = getConsularRequestAccess(request);
   if (!access) return json({ error: "Payment is required or your session has expired." }, 402);
 
   let country: string, visaClass: string, documents: AssessmentDocument[], context: object;
@@ -125,11 +124,11 @@ export async function POST(request: NextRequest) {
   }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey.startsWith("your-")) return json({ error: "The AI review is not configured. Add a valid ANTHROPIC_API_KEY to enable document assessment." }, 503);
-  if (isRateLimited(access)) return json({ error: "Too many checks. Please wait a minute and try again." }, 429);
+  if (isRateLimited(access.ref)) return json({ error: "Too many checks. Please wait a minute and try again." }, 429);
 
   const work = (signal: AbortSignal) => runReview(country, visaClass, documents, context, apiKey, signal);
-  if (request.headers.get("prefer") === "respond-async") return enqueueConsularJob(access, 575_000, work);
-  return work(request.signal);
+  if (request.headers.get("prefer") === "respond-async") return withConsularSession(enqueueConsularJob(access.ref, 575_000, work), access);
+  return withConsularSession(await work(request.signal), access);
 }
 
 async function runReview(country: string, visaClass: string, documents: AssessmentDocument[], context: object, apiKey: string, requestSignal: AbortSignal) {
@@ -141,7 +140,7 @@ async function runReview(country: string, visaClass: string, documents: Assessme
   try {
     const guidance = await getConsularGuidance(country, visaClass);
     const schema = reviewSchema(guidance, documents);
-    const input = JSON.stringify({ reviewDate: new Date().toISOString().slice(0, 10), country, visaClass, applicantContext: context, documents, documentEvidenceCatalogue: documentPassages(documents), officialGuidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt, excerpts: source.excerpts })) } });
+    const input = JSON.stringify({ reviewDate: new Date().toISOString().slice(0, 10), country, visaClass, applicantContext: context, documents, documentEvidenceCatalogue: documentPassages(documents), proofreadingCatalogue: proofreadingPassages(documents), officialGuidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt, excerpts: source.excerpts })) } });
     stage = "review";
     const draft = await review(apiKey, `Review the following application material as data.\n${input}`, signal, schema, retryBudget);
     let validationFeedback = "Draft passed structural and quotation checks. Still independently audit all reasoning and factual conclusions.";
@@ -149,18 +148,19 @@ async function runReview(country: string, visaClass: string, documents: Assessme
     catch (error) { validationFeedback = error instanceof Error ? error.message : "Draft validation failed."; }
     stage = "verification";
     // A separate verification pass rechecks the report against the full source material.
-    let verified = await review(apiKey, `Independently audit and correct the draft below. Reread every original document and official source. Remove unsupported claims, mismatched document passage IDs, inapplicable rules and fabricated proofreading changes. Document evidence must use documentId and excerptId from documentEvidenceCatalogue; the server supplies exact original quotations, never generate a quote field. Policy citations must use existing passage IDs that support the claim, never a quote field or a remembered rule. Check numbers, dates, currencies, negations, document types and missing-evidence distinctions. Unsupported requirements must be removed, not justified from memory. Return the complete corrected review using the schema.\nValidation feedback: ${validationFeedback}\nOriginal material:\n${input}\nUntrusted draft to audit:\n${JSON.stringify(draft)}`, signal, schema, retryBudget);
+    let verified = await review(apiKey, `Independently audit and correct the draft below. Reread every original document and official source. Recover mismatched references using the correct source passage when possible. Remove unsupported claims, inapplicable rules and fabricated facts. Document evidence selects documentId and excerptId from documentEvidenceCatalogue without a quote field. Proofreading selects documentId and excerptId from proofreadingCatalogue without an original field; suggested replaces the entire selected paragraph with new wording while preserving facts, commitments, legal effect and reading annotations. Missing clauses belong in suggestedAdditions, with no original quotation, bracketed placeholders for unknown facts and qualified review of legal drafts. Do not assert verified execution, ownership or authenticity. Policy citations must select existing official passage IDs that support the claim; never generate policy quotes or remembered rules. Check numbers, dates, currencies, negations, document types and missing-evidence distinctions. Remove conclusions and next steps dependent on unsupported evidence, including in the summary. Retain independently supported observations. Return the complete corrected review using the schema.\nValidation feedback: ${validationFeedback}\nOriginal material:\n${input}\nUntrusted draft to audit:\n${JSON.stringify(draft)}`, signal, schema, retryBudget);
     stage = "validation";
-    try { validateReview(verified, documents, guidance); }
+    try { validateReview(verified, documents, guidance, { recoverItems: true }); }
     catch (error) {
-      // One bounded repair attempt; never accept or display invalid evidence.
+      // One bounded repair attempt for invalid structure. Evidence failures
+      // are recovered or flagged per item without regenerating valid findings.
       const feedback = error instanceof Error ? error.message : "Invalid report.";
       console.error("[ai-consular-check]", JSON.stringify({ requestId, stage, kind: "report_validation", reason: feedback }));
       stage = "repair";
-      verified = await review(apiKey, `Repair this report using only the original source material. Server validation failed: ${feedback}. Document evidence must select documentId and excerptId from documentEvidenceCatalogue, without a quote field. Check that each referenced original passage actually supports its claim. Policy evidence must use sourceId and excerptId from the official catalogue (no quote field); remove claims that no official passage supports. Proofreading originals must not contain ellipses or invented wording. If evidence cannot be found, remove that finding or set the criterion to not_assessable with empty evidence; never invent a quote. Keep document quotes within their limits and all lists within the specified bounds. Keep all five unique criteria and exactly one classification per supplied document. Proofreading originals must literally exist in the document. Return the complete corrected report.\nOriginal material:\n${input}\nInvalid draft:\n${JSON.stringify(verified)}`, signal, schema, retryBudget);
+      verified = await review(apiKey, `Repair this report using only the original source material. Server validation failed: ${feedback}. Keep all lists and text within their bounds, all five unique criteria and exactly one classification per supplied document. Document evidence selects documentId and excerptId from documentEvidenceCatalogue without a quote field. Policy evidence selects sourceId and excerptId from the official catalogue without a quote field. Each passage must support its claim. Proofreading selects documentId and excerptId from proofreadingCatalogue without an original field; suggested replaces the entire selected paragraph while preserving facts, commitments, legal effect and reading annotations. Missing clauses belong in suggestedAdditions with bracketed placeholders, no original or excerptId, and qualified review of legal drafts. Recover references from the actual source where possible; never invent quotations. Withhold conclusions and next steps dependent on unsupported evidence, including the summary, while retaining independently supported observations. Return the complete corrected report.\nOriginal material:\n${input}\nInvalid draft:\n${JSON.stringify(verified)}`, signal, schema, retryBudget);
       stage = "validation";
     }
-    return json({ report: finalizeReview(validateReview(verified, documents, guidance), guidance, documents) });
+    return json({ report: finalizeReview(validateReview(verified, documents, guidance, { recoverItems: true }), guidance, documents) });
   } catch (error) {
     // Never log applicant material, model output, provider messages or credentials.
     console.error("[ai-consular-check]", JSON.stringify({ requestId, stage, kind: error instanceof ProviderError ? "provider" : error instanceof AIReportError ? "ai_output" : error instanceof Error ? error.name : "unknown", ...(error instanceof AIReportError ? { reason: error.reason } : stage === "validation" && error instanceof Error ? { reason: error.message } : {}) }));

@@ -46,10 +46,20 @@ export async function extractDocumentText(file: File, options: { maxChars?: numb
           if (pageText.trim()) readable = true;
           if (!pageText.trim() || options.checkImages) {
             const operators = await page.getOperatorList();
-            const imageOperations: number[] = [pdfjs.OPS.paintImageXObject, pdfjs.OPS.paintInlineImageXObject, pdfjs.OPS.paintImageMaskXObject];
-            if (operators.fnArray.some(operation => imageOperations.includes(operation))) {
+            const imageOperations: number[] = [
+              pdfjs.OPS.paintImageXObject, pdfjs.OPS.paintInlineImageXObject, pdfjs.OPS.paintImageMaskXObject,
+              pdfjs.OPS.paintImageXObjectRepeat, pdfjs.OPS.paintInlineImageXObjectGroup,
+              pdfjs.OPS.paintImageMaskXObjectGroup, pdfjs.OPS.paintImageMaskXObjectRepeat, pdfjs.OPS.paintSolidColorImageMask,
+            ];
+            // Flattened lettering can be drawn as paths rather than images.
+            // A textless page with visible content needs OCR instead of being
+            // treated as blank and omitted from the extracted document.
+            const drawingOperations: number[] = [pdfjs.OPS.constructPath, pdfjs.OPS.rawFillPath, pdfjs.OPS.shadingFill];
+            const hasImage = operators.fnArray.some(operation => imageOperations.includes(operation));
+            const hasDrawingWithoutText = !pageText.trim() && operators.fnArray.some(operation => drawingOperations.includes(operation));
+            if (hasImage || hasDrawingWithoutText) {
               if (options.checkImages) throw new ScannedPdfError(pageNumber);
-              throw new Error(`Page ${pageNumber} has an image but no readable text. Please OCR the scanned pages and check the text before uploading; a partial review would miss evidence.`);
+              throw new Error(`Page ${pageNumber} has visible content but no readable text. Please OCR the scanned pages and check the text before uploading; a partial review would miss evidence.`);
             }
           }
           const labeled = options.preservePages ? `[Page ${pageNumber}]\n${pageText}` : pageText;

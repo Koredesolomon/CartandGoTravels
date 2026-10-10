@@ -31,7 +31,7 @@ const checkout = load('src/app/api/flutterwave/checkout/route.ts');
 const ocr = load('src/app/api/document-ocr/route.ts');
 const itinerary = load('src/app/api/itinerary-pdf/route.ts');
 const originalFetch = global.fetch;
-Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'test-secret-that-is-more-than-32-characters', FLUTTERWAVE_SECRET_KEY: 'test', FLUTTERWAVE_AMOUNT: '49.99', FLUTTERWAVE_CURRENCY: 'USD', DB_HOST: 'localhost', DB_PORT: '3306', DB_USER: 'test-user', DB_PASSWORD: 'test-password', DB_NAME: 'test-database', APP_URL: 'https://site.test' });
+Object.assign(process.env, { CONSULAR_PAYMENT_REQUIRED: 'true', PAYMENT_SESSION_SECRET: 'test-secret-that-is-more-than-32-characters', FLUTTERWAVE_SECRET_KEY: 'test', FLUTTERWAVE_AMOUNT: '49.99', FLUTTERWAVE_CURRENCY: 'USD', DB_HOST: 'localhost', DB_PORT: '3306', DB_USER: 'test-user', DB_PASSWORD: 'test-password', DB_NAME: 'test-database', APP_URL: 'https://site.test' });
 
 function callbackRequest(id, token) {
   return new NextRequest(`https://site.test/ai-consular-check/payment-callback?transaction_id=${id}&status=successful`, { headers: token ? { cookie: `${payment.CHECKOUT_COOKIE}=${token}` } : {} });
@@ -55,6 +55,54 @@ test('AI and verification APIs deny unpaid and legacy-cookie requests before ups
       assert.equal((await verify.POST(request)).status, 402);
     }
   } finally { global.fetch = originalFetch; }
+});
+
+test('production always requires payment while local development is free by default', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, CONSULAR_PAYMENT_REQUIRED: process.env.CONSULAR_PAYMENT_REQUIRED };
+  const { isConsularPaymentRequired, CONSULAR_SESSION_COOKIE } = load('src/lib/consularAccess.ts');
+  const jobs = load('src/app/api/consular-jobs/[id]/route.ts');
+  const request = cookie => new NextRequest('https://site.test/api/consular', { method: 'POST', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: '{}' });
+  global.fetch = async () => { throw new Error('Access checks must not call a provider'); };
+  try {
+    process.env.NODE_ENV = 'production';
+    for (const flag of [undefined, 'false', '', 'true']) {
+      if (flag === undefined) delete process.env.CONSULAR_PAYMENT_REQUIRED;
+      else process.env.CONSULAR_PAYMENT_REQUIRED = flag;
+      assert.equal(isConsularPaymentRequired(), true);
+      for (const cookie of ['', `${CONSULAR_SESSION_COOKIE}=${'a'.repeat(64)}`]) {
+        for (const route of [verify, ai, ocr, itinerary]) assert.equal((await route.POST(request(cookie))).status, 402);
+        const id = '12345678-1234-4123-8123-123456789abc';
+        const poll = new NextRequest(`https://site.test/api/consular-jobs/${id}`, { headers: { cookie } });
+        const context = { params: Promise.resolve({ id }) };
+        assert.equal((await jobs.GET(poll, context)).status, 402);
+        assert.equal((await jobs.DELETE(new NextRequest(poll, { method: 'DELETE' }), context)).status, 402);
+      }
+      const paid = await verify.POST(request(`${payment.ACCESS_COOKIE}=${payment.signToken('access', 'production-paid-ref')}`));
+      assert.equal(paid.status, 200);
+      assert.deepEqual(await paid.json(), { verified: true, paymentRequired: true });
+      assert.equal((await checkout.POST(request())).status, 400, 'Production checkout is active and validates input');
+    }
+
+    process.env.NODE_ENV = 'development';
+    for (const flag of [undefined, 'false']) {
+      if (flag === undefined) delete process.env.CONSULAR_PAYMENT_REQUIRED;
+      else process.env.CONSULAR_PAYMENT_REQUIRED = flag;
+      assert.equal(isConsularPaymentRequired(), false);
+      const free = await verify.POST(request());
+      assert.equal(free.status, 200);
+      assert.deepEqual(await free.json(), { verified: true, paymentRequired: false });
+      assert.match(free.cookies.get(CONSULAR_SESSION_COOKIE).value, /^[a-f0-9]{64}$/);
+      assert.equal(free.cookies.get(payment.ACCESS_COOKIE), undefined);
+      for (const route of [ai, ocr, itinerary]) assert.equal((await route.POST(request())).status, 400, 'Local tools reach input validation without payment');
+      assert.equal((await checkout.POST(request())).status, 409, 'Local free use cannot start checkout');
+    }
+    process.env.CONSULAR_PAYMENT_REQUIRED = 'true';
+    assert.equal(isConsularPaymentRequired(), true, 'Local payment testing remains available explicitly');
+    assert.equal((await verify.POST(request())).status, 402);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    global.fetch = originalFetch;
+  }
 });
 
 test('all consular entry points require signed paid access in every environment even with retired bypass flags', async () => {
@@ -259,8 +307,8 @@ test('document uploads read TXT and DOCX contents and reject empty, oversized, i
   assert.equal(await extractDocumentText(new File([bytes], 'sample.docx')), 'Actual DOCX application text');
 });
 
-function pdfFixture(text) {
-  const stream = text ? `BT /F1 12 Tf 72 720 Td (${text}) Tj ET` : '';
+function pdfFixture(text, graphics = '') {
+  const stream = (text ? `BT /F1 12 Tf 72 720 Td (${text}) Tj ET` : '') + graphics;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -296,22 +344,62 @@ test('PDF uploads extract actual text and reject documents without readable text
   } finally { worker.destroy(); overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
 });
 
+test('Proofread sends visible outlined PDF lettering through OCR and keeps the deed with the other documents', async () => {
+  const canvas = require('@napi-rs/canvas');
+  Object.assign(global, { DOMMatrix: canvas.DOMMatrix, Path2D: canvas.Path2D, ImageData: canvas.ImageData });
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  const worker = new pdfjs.PDFWorker();
+  overrides.set('pdfjs-dist/legacy/build/pdf.mjs', { ...pdfjs, getDocument: options => pdfjs.getDocument({ ...options, worker, standardFontDataUrl: path.join(root, 'node_modules/pdfjs-dist/standard_fonts/') }) });
+  // A visible E drawn as a filled outline, without a text layer or bitmap image.
+  const outlinedLetter = '72 720 m 72 680 l 100 680 l 100 685 l 78 685 l 78 697 l 94 697 l 94 703 l 78 703 l 78 715 l 100 715 l 100 720 l h f';
+  const deed = new File([pdfFixture('', outlinedLetter)], 'Deed of assignment.pdf');
+  const scan = { text: '[Page 1]\nSynthetic deed text', notes: [], pageCount: 1 };
+  let scans = 0;
+  global.fetch = async (url, options) => {
+    assert.equal(url, '/api/document-ocr');
+    assert.equal(options.body, deed);
+    scans++;
+    return Response.json(scan);
+  };
+  try {
+    const { extractDocumentText } = load('src/lib/documentText.ts');
+    await assert.rejects(extractDocumentText(deed), /Page 1.*partial review/);
+    const { readAssessmentFiles } = load('src/lib/assessmentFiles.ts');
+    const documents = await readAssessmentFiles([
+      new File([pdfFixture('Synthetic proof of funds')], 'Proof of funds.pdf'),
+      new File(['Synthetic statement of purpose'], 'SOP.txt'),
+      deed,
+    ], new AbortController().signal);
+    assert.equal(scans, 1);
+    assert.deepEqual(documents.map(document => document.name), ['Proof of funds.pdf', 'SOP.txt', deed.name]);
+    assert.equal(documents[0].text, '[Page 1]\nSynthetic proof of funds');
+    assert.equal(documents[1].text, 'Synthetic statement of purpose');
+    assert.equal(documents[2].text, scan.text);
+    assert.equal(documents[2].extraction, 'ocr');
+    assert.deepEqual(documents[2].ocrNotes, []);
+    await assert.rejects(readAssessmentFiles([new File([pdfFixture('')], 'Blank.pdf')], new AbortController().signal), /No readable text/);
+    assert.equal(scans, 1, 'A genuinely blank PDF does not make a provider request');
+  } finally { global.fetch = originalFetch; worker.destroy(); overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
+});
+
 test('mixed text/scanned PDFs are rejected instead of assessing a partial extraction', async () => {
   let destroyed = false;
   overrides.set('pdfjs-dist/legacy/build/pdf.mjs', {
-    GlobalWorkerOptions: {}, VerbosityLevel: { ERRORS: 0 }, OPS: { paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 87 },
+    GlobalWorkerOptions: {}, VerbosityLevel: { ERRORS: 0 }, OPS: { paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 87, paintImageXObjectRepeat: 88 },
     getDocument: () => ({
       destroy: async () => { destroyed = true; },
       promise: Promise.resolve({ numPages: 2, getPage: async number => ({
         getTextContent: async () => ({ items: number === 1 ? [{ str: 'A text-based first page', hasEOL: true }] : [] }),
-        getOperatorList: async () => ({ fnArray: [85] }), cleanup: () => {},
+        getOperatorList: async () => ({ fnArray: [number === 1 ? 88 : 85] }), cleanup: () => {},
       }) }),
     }),
   });
   try {
-    const { extractDocumentText } = load('src/lib/documentText.ts');
+    const { extractDocumentText, ScannedPdfError } = load('src/lib/documentText.ts');
     await assert.rejects(extractDocumentText(new File(['synthetic'], 'mixed.pdf'), { preservePages: true }), /Page 2.*partial review/);
     assert.equal(destroyed, true);
+    await assert.rejects(extractDocumentText(new File(['synthetic'], 'mixed.pdf'), { preservePages: true, checkImages: true }), error => error instanceof ScannedPdfError && error.pageNumber === 1, 'Repeated scan images need OCR even when the page also has a text layer');
   } finally { overrides.delete('pdfjs-dist/legacy/build/pdf.mjs'); }
 });
 

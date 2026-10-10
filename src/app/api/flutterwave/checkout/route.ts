@@ -1,8 +1,10 @@
 import { checkPaymentStorage, PaymentStorageError } from "@/lib/database";
 import { NextRequest, NextResponse } from "next/server";
 import { CHECKOUT_COOKIE, newCheckoutRef, paymentConfig, PaymentConfigurationError, signToken } from "@/lib/payment";
+import { isConsularPaymentRequired } from "@/lib/consularAccess";
 
 export async function POST(request: NextRequest) {
+  if (!isConsularPaymentRequired()) return NextResponse.json({ code: "PAYMENT_DISABLED", error: "Payment is currently disabled. Refresh the AI Consular page to use the tools." }, { status: 409 });
   const body = await request.json().catch(() => null);
   const email = typeof body?.email === "string" ? body.email.trim() : "";
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });

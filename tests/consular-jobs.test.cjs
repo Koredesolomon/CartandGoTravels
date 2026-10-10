@@ -21,7 +21,7 @@ function load(relative) {
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }
-Object.assign(process.env, { PAYMENT_SESSION_SECRET: 'synthetic-test-secret-more-than-32-characters', ANTHROPIC_API_KEY: 'synthetic-test-key', NODE_ENV: 'test' });
+Object.assign(process.env, { CONSULAR_PAYMENT_REQUIRED: 'true', PAYMENT_SESSION_SECRET: 'synthetic-test-secret-more-than-32-characters', ANTHROPIC_API_KEY: 'synthetic-test-key', NODE_ENV: 'test' });
 const { signToken, ACCESS_COOKIE } = load('src/lib/payment.ts');
 const { POST: startScan } = load('src/app/api/document-ocr/route.ts');
 const { POST: startReview } = load('src/app/api/ai-consular-check/route.ts');
@@ -29,6 +29,9 @@ const { GET: poll, DELETE: cancel } = load('src/app/api/consular-jobs/[id]/route
 const { enqueueConsularJob } = load('src/lib/consularJobs.ts');
 const { readAssessmentFiles, AssessmentAccessError } = load('src/lib/assessmentFiles.ts');
 const { requestConsularResult } = load('src/lib/consularRequest.ts');
+const { CONSULAR_SESSION_COOKIE } = load('src/lib/consularAccess.ts');
+const { POST: verifyAccess } = load('src/app/api/flutterwave/verify/route.ts');
+const { POST: checkout } = load('src/app/api/flutterwave/checkout/route.ts');
 const reader = load('src/lib/documentText.ts');
 const { NextRequest } = nextServer;
 const { PDFDocument } = require('pdf-lib');
@@ -202,4 +205,94 @@ test('polling handles expired access, cancellation and invalid job IDs while pre
     await assert.rejects(readAssessmentFiles([file], new AbortController().signal), /invalid job reference/);
     assert.equal(file.size, 9);
   } finally { global.fetch = original; reader.extractDocumentText = originalReader; }
+});
+
+test('local free access creates separate private sessions and runs OCR without payment credentials', async () => {
+  const saved = { CONSULAR_PAYMENT_REQUIRED: process.env.CONSULAR_PAYMENT_REQUIRED, PAYMENT_SESSION_SECRET: process.env.PAYMENT_SESSION_SECRET, NODE_ENV: process.env.NODE_ENV };
+  const original = global.fetch;
+  const ids = [];
+  delete process.env.CONSULAR_PAYMENT_REQUIRED;
+  delete process.env.PAYMENT_SESSION_SECRET;
+  process.env.NODE_ENV = 'development';
+  const freeRequest = (id, session, method = 'GET') => new NextRequest(`https://site.test/api/consular-jobs/${id}`, { method, headers: session ? { cookie: `${CONSULAR_SESSION_COOKIE}=${session}` } : {} });
+  const upload = (bytes, session) => new NextRequest('https://site.test/api/document-ocr', { method: 'POST', headers: { Prefer: 'respond-async', 'Content-Type': 'application/pdf', ...(session ? { cookie: `${CONSULAR_SESSION_COOKIE}=${session}` } : {}) }, body: bytes });
+  global.fetch = async url => {
+    assert.equal(url, 'https://api.anthropic.com/v1/messages');
+    return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ pages: [{ page: 1, status: 'readable', text: 'Free scan result', notes: [] }] }) }] });
+  };
+  try {
+    const pdf = await PDFDocument.create(); pdf.addPage();
+    const bytes = await pdf.save();
+    const response = await startScan(upload(bytes));
+    assert.equal(response.status, 202);
+    const session = response.cookies.get(CONSULAR_SESSION_COOKIE);
+    assert.match(session.value, /^[a-f0-9]{64}$/);
+    assert.equal(session.httpOnly, true);
+    assert.equal(session.secure, true);
+    assert.equal(session.sameSite, 'lax');
+    assert.equal(response.cookies.get(ACCESS_COOKIE), undefined);
+    const id = (await response.json()).jobId;
+    ids.push([id, session.value]);
+    const other = await verifyAccess(new NextRequest('https://site.test/api/flutterwave/verify', { method: 'POST' }));
+    assert.equal(other.status, 200);
+    assert.deepEqual(await other.json(), { verified: true, paymentRequired: false });
+    const otherSession = other.cookies.get(CONSULAR_SESSION_COOKIE).value;
+    assert.notEqual(otherSession, session.value);
+    assert.equal((await poll(freeRequest(id), context(id))).status, 404);
+    assert.equal((await poll(freeRequest(id, otherSession), context(id))).status, 404);
+    await cancel(freeRequest(id, otherSession, 'DELETE'), context(id));
+    assert.equal((await poll(freeRequest(id, session.value), context(id))).status, 202);
+    await scheduled.shift()();
+    const result = await poll(freeRequest(id, session.value), context(id));
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).text, '[Page 1]\nFree scan result');
+
+    const again = await startScan(upload(bytes, session.value));
+    assert.equal(again.status, 202);
+    assert.equal(again.cookies.get(CONSULAR_SESSION_COOKIE), undefined, 'Reuse the browser identity');
+    const againId = (await again.json()).jobId;
+    ids.push([againId, session.value]);
+    await scheduled.shift()();
+    assert.equal((await poll(freeRequest(againId, session.value), context(againId))).status, 200);
+
+    process.env.CONSULAR_PAYMENT_REQUIRED = 'true';
+    assert.equal((await startScan(upload(bytes, session.value))).status, 402, 'An anonymous session cannot unlock paid mode');
+    assert.equal((await poll(freeRequest(id, session.value), context(id))).status, 402);
+    process.env.CONSULAR_PAYMENT_REQUIRED = 'false';
+  } finally {
+    for (const [id, session] of ids) await cancel(freeRequest(id, session, 'DELETE'), context(id));
+    global.fetch = original;
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+test('free mode disables checkout, preserves input validation and permits anonymous AI review', async () => {
+  const saved = process.env.CONSULAR_PAYMENT_REQUIRED;
+  const original = global.fetch;
+  process.env.CONSULAR_PAYMENT_REQUIRED = 'false';
+  let id, session;
+  global.fetch = async url => {
+    assert.equal(url, 'https://api.anthropic.com/v1/messages', 'No Flutterwave request is allowed');
+    return Response.json({ error: 'Synthetic provider failure' }, { status: 401 });
+  };
+  try {
+    const payment = await checkout(new NextRequest('https://site.test/api/flutterwave/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'synthetic@example.com' }) }));
+    assert.equal(payment.status, 409);
+    assert.equal((await payment.json()).code, 'PAYMENT_DISABLED');
+    assert.equal((await startScan(new NextRequest('https://site.test/api/document-ocr', { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: 'Invalid PDF' }))).status, 400);
+    assert.equal((await startReview(new NextRequest('https://site.test/api/ai-consular-check', { method: 'POST', body: '{}' }))).status, 400);
+    const response = await startReview(new NextRequest('https://site.test/api/ai-consular-check', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'respond-async' }, body: JSON.stringify({ country: 'Ghana', visaClass: 'Visit / Tourist Visa', documents: [{ id: 'document-1', name: 'Purpose.txt', text: 'Synthetic purpose statement.' }] }) }));
+    assert.equal(response.status, 202);
+    id = (await response.json()).jobId;
+    session = response.cookies.get(CONSULAR_SESSION_COOKIE).value;
+    await scheduled.shift()();
+    const request = new NextRequest(`https://site.test/api/consular-jobs/${id}`, { headers: { cookie: `${CONSULAR_SESSION_COOKIE}=${session}` } });
+    const result = await poll(request, context(id));
+    assert.equal(result.status, 503);
+    assert.equal((await result.json()).code, 'provider_unavailable');
+  } finally {
+    if (id) await cancel(new NextRequest(`https://site.test/api/consular-jobs/${id}`, { method: 'DELETE', headers: { cookie: `${CONSULAR_SESSION_COOKIE}=${session}` } }), context(id));
+    global.fetch = original;
+    process.env.CONSULAR_PAYMENT_REQUIRED = saved;
+  }
 });
