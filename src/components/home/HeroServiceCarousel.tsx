@@ -104,12 +104,12 @@ const slides: readonly ServiceSlide[] = [
 
 export function HeroServiceCarousel() {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const activeSlide = slides[activeIndex];
 
   useEffect(() => {
-    if (isPaused || isHovered) return;
+    if (isFocused || isHovered) return;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let timer: number | undefined;
     const updateRotation = () => {
@@ -127,7 +127,7 @@ export function HeroServiceCarousel() {
       window.clearInterval(timer);
       reducedMotion.removeEventListener("change", updateRotation);
     };
-  }, [isPaused, isHovered]);
+  }, [isFocused, isHovered]);
 
   return (
     <section
@@ -135,8 +135,9 @@ export function HeroServiceCarousel() {
       aria-roledescription="carousel"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      onFocusCapture={event => {
-        if (!(event.target as HTMLElement).closest("[data-carousel-playback]")) setIsPaused(true);
+      onFocusCapture={() => setIsFocused(true)}
+      onBlurCapture={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setIsFocused(false);
       }}
       className="relative isolate min-h-[calc(100vh-76px)] overflow-hidden bg-[#050505] text-[#fcf8f1]"
     >
@@ -161,7 +162,7 @@ export function HeroServiceCarousel() {
         <div />
 
         <div className="py-10">
-          <div className="max-w-4xl" role="group" aria-roledescription="slide" aria-label={`${activeIndex + 1} of ${slides.length}`} aria-live={isPaused ? "polite" : "off"}>
+          <div className="max-w-4xl" role="group" aria-roledescription="slide" aria-label={`${activeIndex + 1} of ${slides.length}`} aria-live={isFocused ? "polite" : "off"}>
             <div className="mb-5 inline-flex items-center gap-3 text-sm font-semibold text-white">
               <Icon name={activeSlide.icon} className="h-4 w-4 text-[#f0a42f]" />
               {activeSlide.eyebrow}
@@ -196,28 +197,6 @@ export function HeroServiceCarousel() {
         </div>
 
         <div className="space-y-5">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-            <div className="flex items-center gap-2">
-              <button type="button" aria-label="Previous service" onClick={() => setActiveIndex(current => (current - 1 + slides.length) % slides.length)} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-black/30 transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f0a42f]">
-                <Icon name="Chevron" className="h-4 w-4 rotate-90" />
-              </button>
-              <button type="button" aria-label="Next service" onClick={() => setActiveIndex(current => (current + 1) % slides.length)} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-black/30 transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f0a42f]">
-                <Icon name="Chevron" className="h-4 w-4 -rotate-90" />
-              </button>
-              <button type="button" data-carousel-playback aria-label={isPaused ? "Resume slideshow" : "Pause slideshow"} onClick={() => setIsPaused(current => !current)} className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-black/30 transition hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f0a42f] motion-reduce:hidden">
-                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-4 w-4">
-                  {isPaused ? <path d="m8 5 11 7-11 7V5Z" /> : <path d="M6 5h4v14H6V5Zm8 0h4v14h-4V5Z" />}
-                </svg>
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1" aria-label="Choose a service">
-              {slides.map((slide, index) => (
-                <button key={slide.title} type="button" aria-label={`Show ${slide.title}`} aria-pressed={index === activeIndex} onClick={() => setActiveIndex(index)} className="flex h-8 w-6 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f0a42f]">
-                  <span aria-hidden="true" className={`h-2 rounded-full transition-all motion-reduce:transition-none ${index === activeIndex ? "w-5 bg-[#f0a42f]" : "w-2 bg-white/50"}`} />
-                </button>
-              ))}
-            </div>
-          </div>
           <div className="grid max-w-4xl grid-cols-2 gap-3 sm:grid-cols-4">
             {stats.map(([value, label]) => (
               <div key={label} className="border-l border-white/20 pl-4">
