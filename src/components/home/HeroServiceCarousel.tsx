@@ -104,41 +104,20 @@ const slides: readonly ServiceSlide[] = [
 
 export function HeroServiceCarousel() {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [isFocused, setIsFocused] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
   const activeSlide = slides[activeIndex];
 
   useEffect(() => {
-    if (isFocused || isHovered) return;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    let timer: number | undefined;
-    const updateRotation = () => {
-      window.clearInterval(timer);
-      if (!reducedMotion.matches) {
-        timer = window.setInterval(() => {
-          setActiveIndex((current) => (current + 1) % slides.length);
-        }, 6200);
-      }
-    };
-    updateRotation();
-    reducedMotion.addEventListener("change", updateRotation);
+    const timer = window.setInterval(() => {
+      setActiveIndex(current => (current + 1) % slides.length);
+    }, 6200);
 
-    return () => {
-      window.clearInterval(timer);
-      reducedMotion.removeEventListener("change", updateRotation);
-    };
-  }, [isFocused, isHovered]);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <section
       aria-label="Travel services"
       aria-roledescription="carousel"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      onFocusCapture={() => setIsFocused(true)}
-      onBlurCapture={event => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setIsFocused(false);
-      }}
       className="relative isolate min-h-[calc(100vh-76px)] overflow-hidden bg-[#050505] text-[#fcf8f1]"
     >
       {slides.map((slide, index) => (
@@ -162,7 +141,7 @@ export function HeroServiceCarousel() {
         <div />
 
         <div className="py-10">
-          <div className="max-w-4xl" role="group" aria-roledescription="slide" aria-label={`${activeIndex + 1} of ${slides.length}`} aria-live={isFocused ? "polite" : "off"}>
+          <div className="max-w-4xl" role="group" aria-roledescription="slide" aria-label={`${activeIndex + 1} of ${slides.length}`} aria-live="off">
             <div className="mb-5 inline-flex items-center gap-3 text-sm font-semibold text-white">
               <Icon name={activeSlide.icon} className="h-4 w-4 text-[#f0a42f]" />
               {activeSlide.eyebrow}
