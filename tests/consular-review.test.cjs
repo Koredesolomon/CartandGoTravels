@@ -467,6 +467,7 @@ test('source outages permit a limited evidence review without an eligibility sco
 });
 
 const { validateAssessmentFiles, readAssessmentFiles, AssessmentAccessError } = load('src/lib/assessmentFiles.ts');
+const { readConsularResponse } = load('src/lib/consularResponse.ts');
 const documentReader = load('src/lib/documentText.ts');
 const { validateOcrResult } = load('src/lib/documentOcr.ts');
 const { POST: readScan } = load('src/app/api/document-ocr/route.ts');
@@ -514,6 +515,59 @@ test('Proofread processes an entire scan internally, propagates uncertainty and 
     const controller = new AbortController();
     global.fetch = async () => { controller.abort(); return Response.json(scan); };
     await assert.rejects(readAssessmentFiles([file], controller.signal), /abort/i);
+  } finally { documentReader.extractDocumentText = originalReader; global.fetch = originalFetch; }
+});
+
+test('consular responses preserve API JSON and turn hosting HTML, empty and malformed bodies into controlled HTTP diagnostics', async () => {
+  const report = { report: { summary: 'Synthetic review' }, requestId: 'synthetic-reference' };
+  assert.deepEqual(await readConsularResponse(Response.json(report), 'review'), report);
+  const failure = { error: 'Provider is busy', code: 'provider_unavailable' };
+  assert.deepEqual(await readConsularResponse(Response.json(failure, { status: 503 }), 'review'), failure);
+
+  for (const [status, expected] of [[413, /upload size/], [403, /blocked/], [404, /deployment/], [405, /deployment/], [429, /Too many requests/], [502, /temporarily unavailable/], [503, /temporarily unavailable/], [200, /unexpected response/]]) {
+    for (const service of ['scan', 'review']) {
+      const endpoint = service === 'scan' ? '/api/document-ocr' : '/api/ai-consular-check';
+      await assert.rejects(readConsularResponse(new Response('<html><h1>Private proxy details</h1></html>', { status, headers: { 'content-type': 'text/html' } }), service), error => {
+        assert.match(error.message, expected);
+        assert.ok(error.message.includes(`${endpoint}, HTTP ${status}`));
+        assert.ok(!/Private proxy|Unexpected token|<html>/.test(error.message));
+        return true;
+      });
+    }
+  }
+  for (const body of ['', '{', 'null', '[]']) {
+    await assert.rejects(readConsularResponse(new Response(body), 'scan'), /unexpected response.*HTTP 200/);
+  }
+  for (const status of [408, 504]) {
+    const timeout = await readConsularResponse(new Response('<html>Gateway timeout</html>', { status }), 'scan');
+    assert.equal(timeout.code, 'review_timeout');
+    assert.match(timeout.error, /timed out/);
+    assert.ok(timeout.error.includes(`HTTP ${status}`));
+  }
+});
+
+test('Proofread handles production HTML upload failures and access expiry without exposing parser errors or accepting partial documents', async () => {
+  const originalReader = documentReader.extractDocumentText, originalFetch = global.fetch;
+  documentReader.extractDocumentText = async () => { throw new documentReader.ScannedPdfError(1); };
+  const file = new File(['synthetic'], 'PROOF OF FUNDS.pdf');
+  try {
+    for (const status of [401, 402]) {
+      global.fetch = async () => new Response('<html>Payment required</html>', { status });
+      await assert.rejects(readAssessmentFiles([file], new AbortController().signal), AssessmentAccessError);
+    }
+    for (const status of [403, 413, 502]) {
+      global.fetch = async () => new Response('<html>Private proxy details</html>', { status });
+      await assert.rejects(readAssessmentFiles([file], new AbortController().signal), error => {
+        assert.ok(error.message.startsWith('PROOF OF FUNDS.pdf: '));
+        assert.ok(error.message.includes(`/api/document-ocr, HTTP ${status}`));
+        assert.ok(!/Private proxy|Unexpected token|<html>/.test(error.message));
+        return true;
+      });
+    }
+    global.fetch = async () => new Response('<html>Gateway timeout</html>', { status: 504 });
+    await assert.rejects(readAssessmentFiles([file], new AbortController().signal), error => /timed out/.test(error.message) && !error.message.includes(file.name));
+    global.fetch = async () => new Response('<html>Unexpected success page</html>');
+    await assert.rejects(readAssessmentFiles([file], new AbortController().signal), /unexpected response.*HTTP 200/);
   } finally { documentReader.extractDocumentText = originalReader; global.fetch = originalFetch; }
 });
 

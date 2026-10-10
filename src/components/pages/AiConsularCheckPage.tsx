@@ -9,6 +9,7 @@ import { worldCountries } from "@/data/countries";
 import { ItineraryPlanner } from "@/components/itinerary/ItineraryPlanner";
 import { extractDocumentText } from "@/lib/documentText";
 import { AssessmentAccessError, readAssessmentFiles, validateAssessmentFiles } from "@/lib/assessmentFiles";
+import { readConsularResponse } from "@/lib/consularResponse";
 import { MAX_ASSESSMENT_CHARS, type ConsularReport } from "@/lib/consularReview";
 import { AssessmentReport } from "@/components/consular/AssessmentReport";
 import { DocumentPdfDownload } from "@/components/consular/DocumentPdfDownload";
@@ -464,9 +465,10 @@ export function AiConsularCheckPage({
         method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ country, visaClass, nationality, residence, routeDetails, documents }),
       });
-      const data = await response.json() as { report?: ConsularReport; error?: string; requestId?: string };
       if (version !== assessmentVersion.current) return;
-      if (response.status === 402) { setUnlocked(false); setShowPaymentPrompt(true); return; }
+      if (response.status === 401 || response.status === 402) { setUnlocked(false); setShowPaymentPrompt(true); return; }
+      const data = await readConsularResponse<{ report?: ConsularReport }>(response, "review");
+      if (version !== assessmentVersion.current || controller.signal.aborted) return;
       if (!response.ok || !data.report) {
         const reference = response.status !== 504 && typeof data.requestId === "string" && /^[a-f0-9-]{36}$/.test(data.requestId) ? ` Reference: ${data.requestId}` : "";
         throw new Error(`${data.error ?? "The AI review could not be completed."}${reference}`);
