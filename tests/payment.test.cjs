@@ -120,7 +120,9 @@ test('checkout and verified callback grant access that remains valid after bypas
     assert.equal(payment.readToken(accessToken, 'access').ref, checkoutRef);
     for (const [route, status] of [[verify, 200], [ai, 400], [ocr, 400], [itinerary, 400]]) {
       const paid = new NextRequest('https://site.test/api/consular', { method: 'POST', headers: { cookie: `${payment.ACCESS_COOKIE}=${accessToken}`, 'content-type': 'application/json' }, body: '{}' });
-      assert.equal((await route.POST(paid)).status, status, 'Paid users pass access checks and reach request validation');
+      const response = await route.POST(paid);
+      assert.equal(response.status, status, 'Paid users pass access checks and reach request validation');
+      if (route === verify) assert.equal(response.headers.get('cache-control'), 'private, no-store');
     }
     const replay = await callback.GET(callbackRequest('7654321', checkoutToken));
     assert.equal(replay.headers.get('location'), 'https://site.test/ai-consular-check?payment=failed');

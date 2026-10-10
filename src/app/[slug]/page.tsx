@@ -22,6 +22,7 @@ type PageProps = {
   searchParams?: Promise<{
     service?: string | string[];
     d?: string | string[];
+    payment?: string | string[];
   }>;
 };
 
@@ -74,12 +75,15 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
   if (slug === "ai-consular-check") {
     const cookieStore = await cookies();
     const initialUnlocked = Boolean(getConsularAccessRef(cookieStore.get(ACCESS_COOKIE)?.value));
+    const query = await searchParams;
+    const paymentStatus = query?.payment === "success" || query?.payment === "failed" ? query.payment : undefined;
 
     const configuredAmount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "49.99");
     const configuredCurrency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
     return (
       <AiConsularCheckPage
         initialUnlocked={initialUnlocked}
+        paymentStatus={paymentStatus}
         paymentAmount={Number.isFinite(configuredAmount) && configuredAmount > 0 ? configuredAmount : 49.99}
         paymentCurrency={/^[A-Z]{3}$/.test(configuredCurrency) ? configuredCurrency : "USD"}
       />

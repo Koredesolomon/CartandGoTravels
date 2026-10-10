@@ -305,25 +305,19 @@ function flagClass(type: Flag["type"]) {
   return "border-[#f00000] bg-[#fff0f0]";
 }
 
-function hasPaymentFailure() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  return params.get("payment") === "failed";
-}
-
 export function AiConsularCheckPage({
   initialUnlocked = false,
+  paymentStatus,
   paymentAmount = 49.99,
   paymentCurrency = "USD",
 }: {
   initialUnlocked?: boolean;
+  paymentStatus?: "success" | "failed";
   paymentAmount?: number;
   paymentCurrency?: string;
 }) {
-  const paymentFailed = hasPaymentFailure();
+  const paymentFailed = paymentStatus === "failed";
+  const paymentSucceeded = initialUnlocked && paymentStatus === "success";
   const price = `${paymentAmount.toFixed(2)} ${paymentCurrency}`;
   const [unlocked, setUnlocked] = useState(initialUnlocked);
   const [paymentEmail, setPaymentEmail] = useState("");
@@ -375,6 +369,56 @@ export function AiConsularCheckPage({
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<string[]>([]);
   const [answerDraft, setAnswerDraft] = useState("");
+
+  useEffect(() => {
+    const channel = typeof BroadcastChannel !== "undefined"
+      ? new BroadcastChannel("cartandgo-consular-payment") : null;
+    let controller: AbortController | null = null;
+    let disposed = false;
+    let retryRequested = false;
+    async function checkAccess() {
+      if (unlocked || disposed) return;
+      if (controller) { retryRequested = true; return; }
+      const requestController = new AbortController();
+      controller = requestController;
+      const timeout = window.setTimeout(() => requestController.abort(), 10000);
+      try {
+        // A tab notification only prompts this check; signed server access grants the unlock.
+        const response = await fetch("/api/flutterwave/verify", {
+          method: "POST", credentials: "same-origin", cache: "no-store", signal: requestController.signal,
+        });
+        const data = await response.json();
+        if (!disposed && response.ok && data.verified === true) {
+          setUnlocked(true);
+          setShowPaymentPrompt(false);
+          setPaymentError("");
+        }
+      } catch {
+        // Keep the page locked if the status check fails; returning to the tab retries it.
+      } finally {
+        window.clearTimeout(timeout);
+        controller = null;
+        if (retryRequested && !disposed) { retryRequested = false; void checkAccess(); }
+      }
+    }
+    const onVisible = () => { if (document.visibilityState === "visible") void checkAccess(); };
+    const onFocus = () => { void checkAccess(); };
+    if (channel) {
+      channel.onmessage = event => {
+        if (event.data?.type === "payment-verified") void checkAccess();
+      };
+      if (paymentSucceeded) channel.postMessage({ type: "payment-verified" });
+    }
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      disposed = true;
+      controller?.abort();
+      channel?.close();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [unlocked, paymentSucceeded]);
 
   const categoryInterviewSets = interviewSets[interviewCategory] as Record<
     string,
@@ -625,6 +669,16 @@ export function AiConsularCheckPage({
 
   return (
     <>
+      {paymentSucceeded && unlocked ? (
+        <section role="status" className="border-b border-green-200 bg-green-50 px-5 py-5 text-green-900 lg:px-8">
+          <div className="mx-auto max-w-7xl">
+            <p className="font-bold">Payment Successful, you can close tab and return to Consular page</p>
+            <Link href="/ai-consular-check#consular-tools" className="mt-2 inline-block font-semibold underline underline-offset-4">
+              Continue to AI Consular
+            </Link>
+          </div>
+        </section>
+      ) : null}
       <section className="relative isolate overflow-hidden bg-[#07141a] text-white">
         <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(7,20,26,.98),rgba(0,60,78,.82),rgba(0,152,186,.28))]" />
         <div className="relative mx-auto grid max-w-7xl gap-10 px-5 py-20 lg:grid-cols-[.9fr_1.1fr] lg:items-center lg:px-8">
@@ -671,7 +725,7 @@ export function AiConsularCheckPage({
         </div>
       </section>
 
-      <section className="bg-[#f6fbfd] px-5 py-16 lg:px-8">
+      <section id="consular-tools" className="scroll-mt-20 bg-[#f6fbfd] px-5 py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
           {isReadingFile ? <p role="status" className="mb-4">Reading your document…</p> : null}
           {uploadError && activeTool !== "document" ? <p role="alert" className="mb-4 text-red-700">{uploadError}</p> : null}
@@ -1144,8 +1198,8 @@ export function AiConsularCheckPage({
 
             <p className="mt-4 text-sm leading-6 text-[#5b6870]">
               Make the {price} payment securely on Flutterwave. After successful
-              payment, you will be redirected back here and AI Consular+ will open
-              automatically.
+              payment, the payment tab will show a confirmation and this page
+              will unlock automatically.
             </p>
 
             <div className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#93670f]">
