@@ -78,6 +78,13 @@ export function additionFactsSupported(source: string, proposed: string) {
   // clauses are proposals for review, never claims about the existing deed.
   const draft = proposed.replace(/\[[^\]]*\]/g, "");
   if (/\b(?:has|have|was|were|is|are)\s+(?:already\s+)?(?:paid|signed|executed|verified|authenticated)\b|\b(?:owns?|owned)\b|\b(?:free of (?:all )?encumbrances|clear title|unencumbered|paid in full|legally valid)\b/i.test(draft)) return false;
+  // A placeholder for a hotel/name/date does not qualify the surrounding
+  // assertion that a booking, approval or other event has already happened.
+  // Keep unsupported event statements inside a full placeholder instead of
+  // allowing a draft addition to manufacture confirmations or supplied records.
+  const confirmedEvent = /\b(?:has|have|was|were|is|are)\s+(?:(?:already|now|fully|successfully|duly)\s+)?(?:been\s+)?(?:(?:already|now|fully|successfully|duly)\s+)?(?:arranged|booked|reserved|confirmed|obtained|received|provided|submitted|attached|enclosed|approved|registered|completed|settled|transferred|granted|issued|certified|secured|paid|signed|executed|verified|authenticated)\b|\b(?:letter|certificate|bank statement)\s+(?:also\s+)?(?:confirms?|certifies?|proves?|verifies?)\b/i;
+  const sourceMatch = createSourceMatcher(source);
+  if (draft.split(/(?<=[.!?;])\s+|\n+/).some(sentence => confirmedEvent.test(sentence) && !sourceMatch(sentence.trim()))) return false;
   const facts = /\b\d[\d,]*(?:\.\d+)?\b|\b(?:[A-Za-z]+\d[\w-]*|\d+[A-Za-z][\w-]*)\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b(?:USD|GBP|EUR|NGN|CAD|AUD|NZD|CHF|JPY|CNY|INR|ZAR|GHS|KES|AED|SAR|QAR)\b/gi;
   const key = (value: string) => value.toLowerCase().replace(/,/g, "");
   const known = new Set((source.match(facts) ?? []).map(key));

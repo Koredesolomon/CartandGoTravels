@@ -4,6 +4,7 @@ import { getConsularRequestAccess, withConsularSession } from "@/lib/consularAcc
 import { MAX_FILE_BYTES } from "@/lib/documentText";
 import { OCR_PROMPT, OCR_SCHEMA, validateOcrResult } from "@/lib/documentOcr";
 import { enqueueConsularJob } from "@/lib/consularJobs";
+import { requestConsularProvider, consularProviderFailureReason } from "@/lib/consularProvider";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
 
 async function transcribe(input: Awaited<ReturnType<typeof readPdf>>, apiKey: string, signal: AbortSignal) {
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await requestConsularProvider({
       method: "POST", signal: AbortSignal.any([signal, AbortSignal.timeout(260_000)]),
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
@@ -71,7 +72,12 @@ async function transcribe(input: Awaited<ReturnType<typeof readPdf>>, apiKey: st
         ] }],
       }),
     });
-    if (!response.ok) return json({ error: response.status === 429 ? "The document reader is busy. Please try again later." : response.status === 401 || response.status === 403 ? "The AI provider rejected its credentials. Check the server's AI configuration." : "The document reader could not process this PDF. Try a clearer or smaller PDF." }, response.status === 429 ? 429 : 503);
+    if (!response.ok) {
+      const providerReason = await consularProviderFailureReason(response);
+      console.error("[document-ocr]", JSON.stringify({ kind: "provider", providerStatus: response.status, providerReason }));
+      if (providerReason === "insufficient_credit") return json({ code: "provider_credit_exhausted", error: "The document reader is temporarily unavailable. Please contact CartandGo support." }, 503);
+      return json({ error: response.status === 429 ? "The document reader is busy. Please try again later." : response.status === 401 || response.status === 403 ? "The AI provider rejected its credentials. Check the server's AI configuration." : "The document reader could not process this PDF. Try a clearer or smaller PDF." }, response.status === 429 ? 429 : 503);
+    }
     const data = await response.json() as { stop_reason?: string; content?: { type?: string; text?: string }[] };
     if (data.stop_reason !== "end_turn" || !Array.isArray(data.content)) return json({ error: "Document reading was incomplete. No partial text was accepted. Please select fewer pages and retry." }, 502);
     const output = data.content.filter(block => block.type === "text").map(block => block.text ?? "").join("");

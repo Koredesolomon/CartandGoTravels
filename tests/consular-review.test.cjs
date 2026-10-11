@@ -1,864 +1,1999 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- Compile the project modules with the existing Node test runtime. */
+
 const { test } = require('node:test');
+
 const assert = require('node:assert/strict');
+
 const fs = require('node:fs');
+
 const path = require('node:path');
+
 const Module = require('node:module');
+
 const ts = require('typescript');
+
 const root = path.resolve(__dirname, '..');
+
 const cache = new Map();
+
 function load(relative) {
+
   const filename = path.join(root, relative);
+
   if (cache.has(filename)) return cache.get(filename).exports;
+
   const mod = new Module(filename, module);
+
   mod.filename = filename;
+
   mod.paths = Module._nodeModulePaths(path.dirname(filename));
+
   const original = mod.require.bind(mod);
+
   mod.require = name => name.startsWith('@/') ? load(`src/${name.slice(2)}.ts`) : original(name);
+
   cache.set(filename, mod);
+
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
+
   return mod.exports;
+
 }
-const { validateReview, finalizeReview, CRITERIA, MAX_ASSESSMENT_CHARS, officialExcerpts, documentPassages, proofreadingPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
+
+const { validateReview, auditDraftWithPresentation, finalizeReview, CRITERIA, MAX_ASSESSMENT_CHARS, LEGAL_CORRECTION_NOTICE, LEGAL_ADDITION_NOTICE, officialExcerpts, documentPassages, proofreadingPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
+
 const { createSourceMatcher, recoverPassage } = load('src/lib/consularSource.ts');
+
 const { officialPageText, getConsularGuidance } = load('src/lib/consularGuidance.ts');
+
 const { POST } = load('src/app/api/ai-consular-check/route.ts');
+
 const { signToken, ACCESS_COOKIE } = load('src/lib/payment.ts');
+
 const { NextRequest } = require('next/server');
+
 Object.assign(process.env, { CONSULAR_PAYMENT_REQUIRED: 'true', PAYMENT_SESSION_SECRET: 'synthetic-test-secret-more-than-32-characters', ANTHROPIC_API_KEY: 'synthetic-test-key', NODE_ENV: 'test' });
+
 const docs = [{ id: 'document-1', name: 'Purpose.txt', text: 'I plans to visit London from 10 July to 20 July 2027. I will pay GBP 2000 from savings.' }, { id: 'document-2', name: 'Bank.txt', text: 'Account holder: Synthetic Applicant. Closing balance: GBP 5000 on 1 June 2027.' }];
-const source = { id: 'source-1', title: 'Official visitor guidance', url: 'https://www.gov.uk/standard-visitor', retrievedAt: '2026-10-09T12:00:00Z', text: 'You must have enough money to support yourself during your trip.' };
+
+const source = { id: 'source-1', title: 'Official visitor guidance', url: 'https\://www.gov.uk/standard-visitor', retrievedAt: '2026-10-09T12:00:00Z', text: 'You must have enough money to support yourself during your trip.' };
+
 source.excerpts = officialExcerpts(source.id, source.text);
+
 const guidance = { status: 'available', sources: [source] };
+
 function fixture() {
+
   return {
+
     summary: 'Limited review of a purpose statement and bank text. Authenticity and complete application evidence are unverified.',
+
     documents: docs.map(doc => ({ id: doc.id, kind: doc.id === 'document-1' ? 'Purpose statement' : 'Bank statement text', relevance: 'relevant', explanation: 'Relevant to the stated visitor trip.' })),
+
     criteria: Object.keys(CRITERIA).map(key => ({ key, status: key === 'ties' ? 'not_assessable' : 'partial', reason: 'Some evidence is supplied; further context is needed.', evidence: key === 'ties' ? [] : [{ documentId: key === 'finances' ? 'document-2' : 'document-1', quote: key === 'finances' ? 'Closing balance: GBP 5000' : 'I plans to visit London' }], policyEvidence: [] })),
+
     findings: [{ type: 'weak', title: 'Incomplete financial picture', body: 'Source-of-funds evidence was not supplied.', evidence: [{ documentId: 'document-2', quote: 'Closing balance: GBP 5000' }], policyEvidence: [{ sourceId: 'source-1', excerptId: 'source-1-passage-1' }] }],
+
     proofreading: [{ documentId: 'document-1', original: 'I plans to visit London', suggested: 'I plan to visit London', explanation: 'Correct subject-verb agreement without changing facts.' }],
+
     suggestedAdditions: [],
+
     missingEvidence: ['Evidence of source of savings was not supplied.'], questions: ['What is your country of residence?'], roadmap: ['Clarify your circumstances.', 'Check the dates across your application.', 'Obtain a human review before submission.'], limitations: ['Only supplied text was reviewed.'],
+
   };
+
 }
+
 function request(body, ref = `test-${Math.random()}`, headers = {}) {
-  return new NextRequest('https://site.test/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json', cookie: `${ACCESS_COOKIE}=${signToken('access', ref)}`, ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+
+  return new NextRequest('https\://site.test/api/ai-consular-check', { method: 'POST', headers: { 'content-type': 'application/json', cookie: `${ACCESS_COOKIE}=${signToken('access', ref)}`, ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+
 }
+
 const payload = { country: 'United Kingdom', visaClass: 'Visit / Tourist Visa', documents: docs, nationality: 'Nigeria', residence: 'Nigeria' };
+
 const providerResponse = (draft, stop = 'end_turn') => Response.json({ stop_reason: stop, content: [{ type: 'text', text: JSON.stringify(draft) }] });
 
+
+
+// Return the compact audit shape for verification calls; full reports remain
+// necessary for initial review and structural repair calls.
+function responseForPass(body, draft, stop = 'end_turn') {
+  return providerResponse(body.output_config.format.schema.properties.issues
+    ? { issues: [] }
+    : draft, stop);
+}
+
 test('verified report retains exact evidence and proofreading; unassessable criteria withhold a score', () => {
+
   const parsed = validateReview(fixture(), docs, guidance);
+
   const report = finalizeReview(parsed, guidance);
+
   assert.equal(report.score, null);
+
   assert.match(report.statusLabel, /Limited review/);
+
   assert.equal(report.proofreading[0].suggested, 'I plan to visit London');
+
   assert.equal(report.guidance.sources[0].text, undefined);
+
   assert.ok(report.limitations.some(item => item.includes('authenticity')));
+
   const shortCorrection = fixture();
+
   shortCorrection.proofreading[0].original = 'I plans';
+
   shortCorrection.proofreading[0].suggested = 'I plan';
+
   assert.equal(validateReview(shortCorrection, docs, guidance).proofreading[0].original, 'I plans');
+
 });
+
+
 
 test('invented quotes, document IDs, citations, missing criteria and unsupported positives are rejected', () => {
+
   const edits = [
+
     draft => { draft.findings[0].evidence[0].quote = 'A nonexistent salary of GBP 99999'; },
+
     draft => { draft.proofreading[0].original = 'I have a nonexistent job'; },
+
     draft => { draft.documents[0].id = 'nonexistent'; },
+
     draft => { draft.documents[1].id = draft.documents[0].id; },
+
     draft => { draft.findings[0].policyEvidence[0].sourceId = 'invented-source'; },
+
     draft => { draft.findings[0].policyEvidence[0].excerptId = 'invented-passage'; },
+
     draft => { draft.criteria.pop(); },
+
     draft => { draft.criteria[1].key = draft.criteria[0].key; },
+
     draft => { draft.criteria[0].evidence = []; },
+
     draft => { draft.criteria[0].status = 'not_applicable'; },
+
     draft => { draft.findings[0].type = 'excellent'; draft.findings[0].evidence = []; },
+
     draft => { draft.findings[0].type = 'risk'; draft.findings[0].evidence = []; draft.findings[0].policyEvidence = []; },
+
   ];
+
   for (const edit of edits) { const draft = fixture(); edit(draft); assert.throws(() => validateReview(draft, docs, guidance)); }
+
   for (const value of [null, [], {}, { score: 100 }]) assert.throws(() => validateReview(value, docs, guidance));
+
 });
+
+
 
 test('readiness is computed from criterion evidence, never accepted from model-provided scores', () => {
+
   const draft = fixture();
+
   draft.score = 100;
+
   draft.criteria.forEach(item => { item.status = 'partial'; item.evidence = [{ documentId: 'document-1', quote: 'I plans to visit London' }]; });
+
   const report = finalizeReview(validateReview(draft, docs, guidance), guidance);
+
   assert.equal(report.score, 50);
+
   assert.equal(report.statusLabel, 'Needs attention');
+
   for (const status of ['partial', 'unavailable', 'unsupported']) assert.equal(finalizeReview(validateReview(draft, docs, guidance), { status, sources: guidance.sources }).score, null);
+
   draft.documents[1].relevance = 'unrelated';
+
   assert.equal(finalizeReview(validateReview(draft, docs, guidance), guidance).score, null);
+
   draft.documents[1].relevance = 'relevant';
+
   draft.findings[0].type = 'risk';
+
   const riskReport = finalizeReview(validateReview(draft, docs, guidance), guidance);
+
   assert.equal(riskReport.score, null);
+
   assert.equal(riskReport.statusLabel, 'Resolve the identified risks');
+
 });
+
+
 
 test('proofreading preserves amounts, dates, currency, negations and commitments instead of fabricating evidence', () => {
+
   assert.equal(proofreadingPreservesFacts('My annual salary is GBP 30000.', 'My annual salary is GBP 30,000.'), true);
+
   assert.equal(proofreadingPreservesFacts('I plans to visit London.', 'I plan to visit London.'), true);
+
   assert.equal(proofreadingPreservesFacts('I plans to visit London.', 'Travel to London is planned.'), true);
+
   for (const [original, suggested] of [
+
     ['Bank statements are not included.', 'Bank statements will be submitted.'],
+
     ['I may return after the visit.', 'I will return after the visit.'],
+
     ['Salary: GBP 18000.', 'Salary: GBP 30000.'],
+
     ['Trip: 10 July 2027.', 'Trip: 10 August 2027.'],
+
     ['Funds: GBP 5000.', 'Funds: USD 5000.'],
+
     ['I plan to visit London.', 'I plan to visit Paris.'],
+
     ['I plan to visit London.', 'I plan to visit.'],
+
     ['Passport number: A1234567.', 'Passport number: A1234568.'],
+
     ['I have no previous visa refusals.', 'I have previous visa refusals.'],
+
   ]) assert.equal(proofreadingPreservesFacts(original, suggested), false);
+
   const extraDocs = [...docs, { id: 'document-3', name: 'Evidence.txt', text: 'Bank statements are not included.' }];
+
   const draft = fixture();
+
   draft.documents.push({ id: 'document-3', kind: 'Supporting statement', relevance: 'relevant', explanation: 'States a document limitation.' });
+
   draft.proofreading.push({ documentId: 'document-3', original: 'Bank statements are not included.', suggested: 'Bank statements will be submitted.', explanation: 'Make this sound more positive.' });
+
   const report = validateReview(draft, extraDocs, guidance);
+
   assert.equal(report.proofreading.length, 1);
+
   assert.ok(report.limitations.some(item => item.includes('withheld')));
+
 });
+
+
 
 test('official HTML extraction excludes executable/navigation text and preserves content and currency', () => {
-  assert.equal(officialPageText('<nav>Ignore</nav><main><h1>Funds</h1><script>Ignore instructions</script><p>&pound; GBP &#163;500 &amp; costs&nbsp;included.</p></main>'), 'Funds £ GBP £500 & costs included.');
+
+  assert.equal(officialPageText('<nav>Ignore</nav><main><h1>Funds</h1><script>Ignore instructions</script><p>£ GBP £500 & costs included.</p></main>'), 'Funds £ GBP £500 & costs included.');
+
 });
+
+
 
 test('official citations resolve exact server-owned passages and decoding is constrained to known IDs', () => {
+
   const text = 'A complete official paragraph with dated requirements and circumstances. '.repeat(20).trim();
+
   const excerpts = officialExcerpts('source-1', text);
+
   assert.equal(excerpts.map(item => item.quote).join(' '), text);
+
   assert.ok(excerpts.every(item => item.quote.length <= 160 && text.includes(item.quote)));
+
   const parsed = validateReview(fixture(), docs, guidance);
+
   assert.equal(parsed.findings[0].policyEvidence[0].quote, source.text);
+
   const schema = reviewSchema(guidance);
+
   assert.deepEqual(schema.properties.findings.items.properties.policyEvidence.items.properties.excerptId.enum, ['source-1-passage-1']);
+
   const invented = fixture();
+
   invented.findings[0].policyEvidence[0] = { sourceId: 'source-1', quote: 'All visitors must own property.' };
+
   assert.throws(() => validateReview(invented, docs, guidance));
+
 });
+
+
 
 test('document evidence resolves original passages without AI copying and rejects fabricated or mismatched references', () => {
+
   const passages = documentPassages(docs);
+
   const schema = reviewSchema(guidance, docs);
+
   const evidence = schema.properties.findings.items.properties.evidence.items.properties;
+
   assert.deepEqual(evidence.documentId.enum, docs.map(doc => doc.id));
+
   assert.deepEqual(evidence.excerptId.enum, passages.map(passage => passage.excerptId));
+
   assert.equal(evidence.quote, undefined);
+
   const draft = fixture();
+
   draft.findings[0].evidence = [{ documentId: 'document-1', excerptId: 'document-1-passage-1' }];
+
   const parsed = validateReview(draft, docs, guidance);
+
   assert.deepEqual(parsed.findings[0].evidence, [{ documentId: 'document-1', quote: docs[0].text }]);
+
   assert.ok(parsed.findings[0].evidence[0].quote.includes('I plans'));
+
   for (const invalid of [
+
     { documentId: 'document-2', excerptId: 'document-1-passage-1' },
+
     { documentId: 'document-1', excerptId: 'invented-passage' },
+
     { documentId: 'document-1', excerptId: 'document-1-passage-1', quote: 'I plan to visit London' },
+
   ]) {
+
     draft.findings[0].evidence = [invalid];
+
     assert.throws(() => validateReview(draft, docs, guidance));
+
   }
+
   const longText = 'Original document facts: NGN 2,500,000, 12 March 2026. '.repeat(200).trim();
+
   const chunks = documentPassages([{ ...docs[0], text: longText }]);
+
   assert.equal(chunks.map(chunk => chunk.quote).join(' '), longText);
+
   assert.ok(chunks.every(chunk => chunk.quote.length >= 8 && chunk.quote.length <= 400 && longText.includes(chunk.quote)));
+
 });
+
+
 
 test('proofreading originals come from source passages and invented or mismatched references remain invalid', () => {
+
   const schema = reviewSchema(guidance, docs).properties.proofreading.items.properties;
+
   assert.deepEqual(schema.documentId.enum, docs.map(doc => doc.id));
+
   assert.deepEqual(schema.excerptId.enum, proofreadingPassages(docs).map(passage => passage.excerptId));
+
   assert.equal(schema.original, undefined, 'The provider cannot generate the original wording');
+
   const correction = { documentId: 'document-1', excerptId: 'document-1-paragraph-1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement without changing the other wording.' };
+
   const draft = fixture(); draft.proofreading = [correction];
+
   const parsed = validateReview(draft, docs, guidance);
+
   assert.equal(parsed.proofreading[0].original, docs[0].text);
+
   assert.equal(parsed.proofreading[0].suggested, correction.suggested);
+
   assert.equal(parsed.proofreading[0].excerptId, undefined);
+
   for (const invalid of [
+
     { ...correction, excerptId: 'invented-passage' },
+
     { ...correction, excerptId: 'document-2-passage-1' },
+
     { ...correction, documentId: 'unknown-document' },
+
     { ...correction, original: 'An invented original quotation' },
+
   ]) {
+
     draft.proofreading = [invalid];
+
     assert.throws(() => validateReview(draft, docs, guidance));
+
   }
+
   for (const suggested of [correction.suggested.replace('2000', '3000'), 'I plan to visit London']) {
+
     draft.proofreading = [{ ...correction, suggested }];
+
     const withheld = validateReview(draft, docs, guidance);
+
     assert.equal(withheld.proofreading.length, 0, 'A source reference cannot bypass preservation of facts');
+
     assert.ok(withheld.limitations.some(item => item.includes('withheld')));
+
   }
+
 });
+
+
 
 test('source recovery returns actual document characters and never guesses changed facts or a different document', () => {
+
   const raw = 'A cafe\u0301\n\tclause: NGN 2,500,000 remains unchanged.';
+
   assert.equal(createSourceMatcher(raw)('A café clause: NGN 2,500,000'), 'A cafe\u0301\n\tclause: NGN 2,500,000');
+
   assert.equal(createSourceMatcher(raw)('A café clause: NGN 3,500,000'), null);
+
   assert.equal(createSourceMatcher(raw)('A café clause: NGN ... remains unchanged.'), null);
+
   assert.equal(recoverPassage([{ excerptId: 'a-b-passage-1' }, { excerptId: 'ab-passage-1' }], 'AB_PASSAGE_1'), undefined, 'Ambiguous recovery is refused');
+
   const draft = fixture();
+
   draft.findings[0].evidence = [{ documentId: docs[0].id, excerptId: 'DOCUMENT_1_PASSAGE_1' }];
+
   draft.proofreading = [{ documentId: docs[0].id, excerptId: 'DOCUMENT_1_PARAGRAPH_1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct grammar.' }];
+
   const recovered = validateReview(draft, docs, guidance);
+
   assert.equal(recovered.findings[0].evidence[0].quote, docs[0].text);
+
   assert.equal(recovered.proofreading[0].original, docs[0].text);
+
   draft.findings[0].evidence = [{ documentId: docs[0].id, excerptId: 'wrong-reference', quote: 'I plans\n to visit London' }];
+
   assert.equal(validateReview(draft, docs, guidance).findings[0].evidence[0].quote, 'I plans to visit London');
+
   draft.findings[0].evidence = [{ documentId: docs[1].id, excerptId: 'wrong-reference', quote: 'I plans to visit London' }];
+
   assert.throws(() => validateReview(draft, docs, guidance), /Unsupported/);
+
 });
+
+
 
 test('long legal paragraphs allow newly worded corrections while protecting facts and legal terms', () => {
+
   const clause = 'The vendor have assigned Plot 17 in Lagos for NGN 2,500,000 on 12 March 2026. ' + 'The parties agree that this clause records the assignment and its terms. '.repeat(24).trim();
+
   const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: clause + '\n\nThe parties shall retain the signed copies.' };
+
   const documents = [...docs, deed];
+
   const draft = fixture();
+
   draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Property evidence, with execution unverified.' });
+
   const replacement = clause.replace('vendor have', 'vendor has').replace('records the assignment and its terms', 'sets out the assignment and its terms');
+
   draft.proofreading = [{ documentId: deed.id, excerptId: `${deed.id}-paragraph-1`, suggested: replacement, explanation: 'Improve grammar and clarity without changing the terms.' }];
+
   const parsed = validateReview(draft, documents, guidance);
+
   assert.ok(replacement.length > 600);
+
   assert.equal(parsed.proofreading[0].original, clause);
+
   assert.equal(parsed.proofreading[0].suggested, replacement);
+
   assert.ok(!deed.text.includes(replacement), 'Proposed wording is not required to exist in the document');
+
   assert.equal(parsed.proofreading[0].requiresLegalReview, true);
+
   assert.ok(proofreadingPassages(documents).every(passage => passage.quote.length <= 4000 && documents.find(doc => doc.id === passage.documentId).text.includes(passage.quote)));
+
   for (const unsafe of [replacement.replace('2,500,000', '3,500,000'), replacement.replace('assigned', 'irrevocably assigned'), replacement.replace('agree', 'agree and shall indemnify the buyer')]) {
+
     draft.proofreading[0].suggested = unsafe;
+
     const withheld = validateReview(draft, documents, guidance);
+
     assert.equal(withheld.proofreading.length, 0);
+
     assert.equal(withheld.verificationIssues[0].code, 'unsafe_wording');
+
+  }
+
+});
+
+
+
+test('suggested additions have no invented original and unknown facts must remain placeholders', () => {
+
+  const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: 'The vendor assigns Plot 17 in Lagos to the purchaser.' };
+
+  const documents = [...docs, deed];
+
+  const draft = fixture();
+
+  draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Property evidence.' });
+
+  const addition = { documentId: deed.id, title: 'Possible dispute clause', proposedText: 'The parties shall resolve disputes through [agreed mechanism] under [applicable law, subject to legal review].', rationale: 'A possible addition for the parties and their legal reviewer to consider; no mandatory clause is asserted.', insertionPoint: 'Before the signature section, if the parties and legal reviewer agree.' };
+
+  draft.suggestedAdditions = [addition];
+
+  const parsed = validateReview(draft, documents, guidance);
+
+  assert.equal(parsed.suggestedAdditions[0].original, undefined);
+
+  assert.equal(parsed.suggestedAdditions[0].excerptId, undefined);
+
+  assert.equal(parsed.suggestedAdditions[0].proposedText, addition.proposedText);
+
+  assert.equal(parsed.suggestedAdditions[0].requiresLegalReview, true);
+
+  assert.equal(parsed.proofreading.length, 1, 'An addition does not replace an existing correction');
+
+  for (const proposedText of ['The parties shall resolve disputes before 31 December 2030.', 'The vendor is Alice Johnson.', 'The deed is authenticated and the property has clear title.']) {
+
+    draft.suggestedAdditions = [{ ...addition, proposedText }];
+
+    const withheld = validateReview(draft, documents, guidance);
+
+    assert.equal(withheld.suggestedAdditions.length, 0);
+
+    assert.equal(withheld.verificationIssues[0].item, 'addition');
+
+  }
+
+  draft.suggestedAdditions = [{ ...addition, original: 'An invented clause' }, addition];
+
+  const flagged = validateReview(draft, documents, guidance, { recoverItems: true });
+
+  assert.equal(flagged.suggestedAdditions.length, 1);
+
+  assert.equal(flagged.verificationIssues[0].index, 0);
+
+  draft.suggestedAdditions = [{ ...addition, documentId: docs[1].id }];
+
+  assert.equal(validateReview(draft, documents, guidance).suggestedAdditions.length, 0, 'Issuer-controlled bank records cannot receive additions');
+
+});
+
+
+
+test('additions cannot assert bookings, approvals or supplied letters through name-only placeholders', () => {
+  const documents = docs.map(doc => ({ ...doc }));
+  const supportedEvent = 'Accommodation has been arranged at Example Hotel.';
+  documents[0].text += `\n\n${supportedEvent}`;
+  const unsupported = [
+    'Accommodation in London has been arranged at [hotel name and address].',
+    'A letter from my employer is [to be/has been] provided with this application.',
+    'The letter confirms my approved leave.',
+    'Consent has been obtained.',
+    'Registration has been completed.',
+    'My visa is approved.',
+    'Payment has been verified.',
+    'Accommodation has been arranged at Another Hotel.',
+  ];
+  const placeholder = '[Confirm whether accommodation has been arranged and insert verified details.]';
+  for (let start = 0; start < unsupported.length; start += 6) {
+    const candidates = unsupported.slice(start, start + 6);
+    const draft = fixture();
+    draft.suggestedAdditions = [...candidates, supportedEvent, placeholder].map(proposedText => ({
+      documentId: documents[0].id, title: 'Possible supporting details', proposedText,
+      rationale: 'Confirm the underlying facts before using any new passage.', insertionPoint: 'After the purpose paragraph.',
+    }));
+    const parsed = validateReview(draft, documents, guidance, { recoverItems: true });
+    assert.deepEqual(parsed.suggestedAdditions.map(item => item.proposedText), [supportedEvent, placeholder]);
+    assert.deepEqual(parsed.verificationIssues.map(item => [item.item, item.index, item.code]), candidates.map((_, index) => ['addition', index, 'unsafe_wording']));
+    assert.equal(parsed.proofreading.length, 1, 'An unsafe addition must not remove a verified correction.');
+    assert.equal(parsed.findings.length, 1, 'An unsafe addition must not remove checked observations.');
   }
 });
 
-test('suggested additions have no invented original and unknown facts must remain placeholders', () => {
-  const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: 'The vendor assigns Plot 17 in Lagos to the purchaser.' };
+test('audit sees source originals and displayed legal warnings at the original positions after other proposals fail', () => {
+  const deed = { id: 'document-3', name: 'Deed of assignment.txt', text: 'The vendor have assigned the leasehold interest in Plot 17.' };
   const documents = [...docs, deed];
   const draft = fixture();
-  draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Property evidence.' });
-  const addition = { documentId: deed.id, title: 'Possible dispute clause', proposedText: 'The parties shall resolve disputes through [agreed mechanism] under [applicable law, subject to legal review].', rationale: 'A possible addition for the parties and their legal reviewer to consider; no mandatory clause is asserted.', insertionPoint: 'Before the signature section, if the parties and legal reviewer agree.' };
-  draft.suggestedAdditions = [addition];
-  const parsed = validateReview(draft, documents, guidance);
-  assert.equal(parsed.suggestedAdditions[0].original, undefined);
-  assert.equal(parsed.suggestedAdditions[0].excerptId, undefined);
-  assert.equal(parsed.suggestedAdditions[0].proposedText, addition.proposedText);
-  assert.equal(parsed.suggestedAdditions[0].requiresLegalReview, true);
-  assert.equal(parsed.proofreading.length, 1, 'An addition does not replace an existing correction');
-  for (const proposedText of ['The parties shall resolve disputes before 31 December 2030.', 'The vendor is Alice Johnson.', 'The deed is authenticated and the property has clear title.']) {
-    draft.suggestedAdditions = [{ ...addition, proposedText }];
-    const withheld = validateReview(draft, documents, guidance);
-    assert.equal(withheld.suggestedAdditions.length, 0);
-    assert.equal(withheld.verificationIssues[0].item, 'addition');
-  }
-  draft.suggestedAdditions = [{ ...addition, original: 'An invented clause' }, addition];
-  const flagged = validateReview(draft, documents, guidance, { recoverItems: true });
-  assert.equal(flagged.suggestedAdditions.length, 1);
-  assert.equal(flagged.verificationIssues[0].index, 0);
-  draft.suggestedAdditions = [{ ...addition, documentId: docs[1].id }];
-  assert.equal(validateReview(draft, documents, guidance).suggestedAdditions.length, 0, 'Issuer-controlled bank records cannot receive additions');
+  draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Legal wording requires qualified review.' });
+  draft.proofreading.unshift({ documentId: docs[0].id, original: 'An invented original sentence.', suggested: 'An invented replacement sentence.', explanation: 'Unverifiable original.' });
+  draft.proofreading.splice(1, 0, { documentId: deed.id, excerptId: `${deed.id}-paragraph-1`, suggested: deed.text.replace('vendor have', 'vendor has'), explanation: 'Correct subject-verb agreement.' });
+  draft.suggestedAdditions = [
+    { documentId: docs[0].id, title: 'Unsupported booking', proposedText: 'Accommodation has been arranged at [hotel name].', rationale: 'Unsupported completed event.', insertionPoint: 'After the purpose.' },
+    { documentId: deed.id, title: 'Draft dispute clause', proposedText: 'The parties shall resolve disputes under [applicable law].', rationale: 'Draft for the parties and legal reviewer.', insertionPoint: 'Before signatures, if appropriate.' },
+  ];
+  const original = structuredClone(draft);
+  const checked = validateReview(draft, documents, guidance, { recoverItems: true });
+  const audit = auditDraftWithPresentation(draft, checked);
+  assert.deepEqual(draft, original, 'Audit presentation must not mutate the model draft or its item indices.');
+  assert.equal(audit.proofreading.length, 3);
+  assert.equal(audit.proofreading[0].backendPresentation.state, 'withheld');
+  assert.equal(audit.proofreading[1].original, deed.text);
+  assert.equal(audit.proofreading[1].backendPresentation.reviewNotice, LEGAL_CORRECTION_NOTICE);
+  assert.equal(audit.proofreading[2].original, checked.proofreading[1].original);
+  assert.equal(audit.proofreading[2].backendPresentation.requiresLegalReview, false);
+  assert.equal(audit.suggestedAdditions.length, 2);
+  assert.equal(audit.suggestedAdditions[0].backendPresentation.state, 'withheld');
+  assert.equal(audit.suggestedAdditions[1].backendPresentation.reviewNotice, LEGAL_ADDITION_NOTICE);
+  assert.equal(audit.suggestedAdditions[1].original, undefined, 'New clauses must still have no original quotation.');
 });
 
 test('unverified items are isolated and aggregate claims depending on them are withheld', () => {
+
   const draft = fixture();
+
   draft.criteria.forEach(item => { item.status = 'supported'; item.evidence = [{ documentId: docs[0].id, quote: 'I plans to visit London' }]; });
+
   const good = structuredClone(draft.findings[0]);
+
   draft.findings.unshift({ ...good, type: 'risk', title: 'Unsupported allegation', body: 'An unsupported adverse conclusion.', evidence: [{ documentId: docs[1].id, quote: 'Invented adverse fact' }] });
+
   draft.proofreading.unshift({ ...draft.proofreading[0], original: 'A fabricated original sentence' });
+
   draft.summary = 'An unsupported adverse conclusion determines readiness.';
+
   draft.roadmap[0] = 'Act on the unsupported adverse conclusion.';
+
   draft.questions[0] = 'Explain the unsupported adverse conclusion.';
+
   draft.missingEvidence[0] = 'Resolve the unsupported adverse conclusion.';
+
   draft.limitations[0] = 'The unsupported adverse conclusion is confirmed.';
+
   const parsed = validateReview(draft, docs, guidance, { recoverItems: true });
+
   assert.equal(parsed.findings.length, 1);
+
   assert.deepEqual(parsed.findings[0].evidence, [{ documentId: docs[1].id, quote: 'Closing balance: GBP 5000' }]);
+
   assert.equal(parsed.proofreading.length, 1);
+
   assert.deepEqual(parsed.verificationIssues.map(issue => [issue.item, issue.index]), [['finding', 0], ['correction', 0]]);
+
   const report = finalizeReview(parsed, guidance, docs);
+
   assert.equal(report.score, null);
+
   assert.match(report.statusLabel, /Partial review/);
+
   assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
+
   assert.ok(report.criteria.every(item => item.evidence.length === 1), 'Verified source observations remain available');
+
   assert.ok(!JSON.stringify(report).includes('unsupported adverse conclusion'));
+
   assert.equal(report.questions.length, 0);
+
   assert.equal(report.missingEvidence.length, 0);
+
 });
+
+
 
 test('unsupported criterion and official citation affect their items and leave other observations intact', () => {
+
   const draft = fixture();
+
   draft.criteria[0].evidence[0].quote = 'Nonexistent purpose wording';
+
   draft.findings.push({ ...structuredClone(draft.findings[0]), policyEvidence: [{ sourceId: source.id, excerptId: 'nonexistent-policy' }] });
+
   const parsed = validateReview(draft, docs, guidance, { recoverItems: true });
+
   assert.equal(parsed.criteria[0].status, 'not_assessable');
+
   assert.equal(parsed.criteria[0].evidence.length, 0);
+
   assert.equal(parsed.criteria[1].status, 'partial');
+
   assert.equal(parsed.findings.length, 1);
+
   assert.equal(parsed.proofreading.length, 1);
+
   assert.deepEqual(parsed.verificationIssues.map(issue => [issue.item, issue.index]), [['criterion', 0], ['finding', 1]]);
+
 });
+
+
 
 test('source recovery cannot conceal malformed entries or oversized nested lists', () => {
+
   for (const mutate of [
+
     draft => { draft.findings[0].evidence.push({ documentId: docs[1].id, quote: '' }); },
+
     draft => { draft.findings[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); },
+
     draft => { draft.findings.push({ ...draft.findings[0], type: 'invalid' }); },
+
     draft => { draft.suggestedAdditions = Array(9).fill({}); },
+
   ]) {
+
     const draft = fixture(); draft.findings[0].evidence[0].quote = 'Nonexistent source text'; mutate(draft);
+
     assert.throws(() => validateReview(draft, docs, guidance, { recoverItems: true }));
+
   }
+
 });
+
+
 
 test('API returns a partial report for a persistent bad quotation while retaining good observations', async () => {
+
   const original = global.fetch;
+
   let calls = 0;
-  global.fetch = async url => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
     calls++;
+
     const draft = fixture(); draft.findings[0].policyEvidence = [];
+
     draft.findings.push({ ...structuredClone(draft.findings[0]), title: 'Unverified item', evidence: [{ documentId: docs[1].id, quote: 'Fabricated financial quotation' }] });
+
     draft.summary = 'A summary depending on the fabricated financial quotation.';
-    return providerResponse(draft);
+
+    return responseForPass(JSON.parse(options.body), draft);
+
   };
+
   try {
+
     const response = await POST(request(payload));
+
     assert.equal(response.status, 200);
+
     assert.equal(calls, 2, 'A bad item does not cause another full report regeneration');
+
     assert.match(response.headers.get('cache-control'), /no-store/);
+
     const { report } = await response.json();
+
     assert.equal(report.findings.length, 1);
+
     assert.equal(report.proofreading.length, 1);
+
     assert.equal(report.verificationIssues[0].index, 1);
+
     assert.equal(report.score, null);
+
     assert.ok(!JSON.stringify(report).includes('Fabricated financial quotation'));
+
     assert.match(report.summary, /withheld/);
+
   } finally { global.fetch = original; }
+
 });
+
+
 
 test('a scanned deed, funds proof and SOP complete review with exact source-bound proofreading originals', async () => {
+
   const deed = { id: 'document-3', name: 'Deed of assignment.pdf', extraction: 'ocr', ocrNotes: ['Visible signature is unverified.'], text: '[Page 1]\nDEED OF ASSIGNMENT\nThe vendor have assigned Plot 17 in Lagos for NGN 2,500,000 on 12 March 2026.\n[Signature mark; signer and authenticity unverified]' };
+
   const documents = [...docs, deed];
+
   const original = global.fetch;
+
   const calls = [];
+
   global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-    assert.equal(url, 'https://api.anthropic.com/v1/messages');
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+    assert.equal(url, 'https\://api.anthropic.com/v1/messages');
+
     const body = JSON.parse(options.body); calls.push(body);
+
     const draft = fixture(); draft.findings[0].policyEvidence = [];
+
     draft.documents.push({ id: deed.id, kind: 'Deed of assignment', relevance: 'relevant', explanation: 'Supplied property evidence; authenticity and execution are unverified.' });
+
     for (const item of [...draft.criteria, ...draft.findings]) item.evidence = item.evidence.map(evidence => ({ documentId: evidence.documentId, excerptId: `${evidence.documentId}-passage-1` }));
+
     draft.proofreading = [
+
       { documentId: docs[0].id, excerptId: `${docs[0].id}-paragraph-1`, suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement.' },
+
       { documentId: deed.id, excerptId: `${deed.id}-paragraph-1`, suggested: deed.text.replace('vendor have', 'vendor has'), explanation: 'Flag subject-verb agreement for the document issuer; preserve facts and the signature annotation.' },
+
     ];
-    return providerResponse(draft);
+
+    return responseForPass(body, draft);
+
   };
+
   try {
+
     const response = await POST(request({ ...payload, documents }));
+
     assert.equal(response.status, 200);
+
     assert.equal(calls.length, 2, 'No repair is needed to copy an original quotation');
+
+    const presentation = JSON.parse(calls[1].messages[0].content.split('\nReport presentation:\n')[1]);
+    assert.deepEqual(presentation.legalDraftWarnings, [{ documentId: deed.id, proofreadingNotice: LEGAL_CORRECTION_NOTICE, additionNotice: LEGAL_ADDITION_NOTICE }], 'The audit must see the same legal warnings the report displays, without changing original item indices.');
+    const auditDraft = JSON.parse(calls[1].messages[0].content.split('\nDraft report:\n')[1].split('\nReport presentation:\n')[0]);
+    assert.equal(auditDraft.proofreading[1].original, deed.text);
+    assert.equal(auditDraft.proofreading[1].backendPresentation.reviewNotice, LEGAL_CORRECTION_NOTICE);
+
     for (const call of calls) {
-      assert.ok(call.messages[0].content.includes(deed.text.replace(/\n/g, '\\n')), 'Both passes receive the complete extracted deed');
-      assert.equal(call.output_config.format.schema.properties.proofreading.items.properties.original, undefined);
+
+      const content = call.messages[0].content;
+
+      assert.ok(
+      content.includes(JSON.stringify(deed.text).slice(1, -1)) ||
+      content.includes(deed.text),
+      'Both passes must receive the complete extracted deed'
+      );
+
+      if (call.output_config.format.schema.properties.proofreading) assert.equal(call.output_config.format.schema.properties.proofreading.items.properties.original, undefined);
+
       assert.ok(call.messages[0].content.includes('proofreadingCatalogue'));
-      assert.match(call.system, /do not generate an original field/i);
+
+      if (call.output_config.format.schema.properties.proofreading) assert.match(call.system, /do not generate an original field/i);
+      else assert.deepEqual(Object.keys(call.output_config.format.schema.properties), ['issues']);
+
     }
+
     const { report } = await response.json();
+
     assert.deepEqual(report.documents.map(document => document.id), documents.map(document => document.id));
+
     assert.equal(report.proofreading.length, 2);
+
     assert.equal(report.proofreading[1].original, deed.text);
+
     assert.equal(report.proofreading[1].suggested, deed.text.replace('vendor have', 'vendor has'));
+
     assert.equal(report.proofreading[1].requiresLegalReview, true);
+
     assert.equal(report.score, null, 'An unchecked scan still cannot receive a readiness score');
+
     assert.ok(report.limitations.some(item => item.includes('Visible signature is unverified')));
+
     const altered = fixture(); altered.documents.push(report.documents[2]); altered.proofreading = [{ documentId: deed.id, excerptId: `${deed.id}-passage-1`, suggested: deed.text.replace('vendor have', 'vendor has').replace('[Signature mark; signer and authenticity unverified]', '[Signature verified]'), explanation: 'Attempted signature rewrite.' }];
+
     assert.equal(validateReview(altered, documents, guidance).proofreading.length, 0, 'Signature annotations cannot be rewritten');
+
   } finally { global.fetch = original; }
+
 });
+
+
 
 test('both provider passes receive complete documents and a passage catalogue, and returned reports contain exact resolved quotations', async () => {
+
   const original = global.fetch;
+
   const calls = [];
+
   global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
     const body = JSON.parse(options.body); calls.push(body);
+
     const draft = fixture(); draft.findings[0].policyEvidence = [];
+
     for (const item of [...draft.criteria, ...draft.findings]) item.evidence = item.evidence.map(evidence => ({ documentId: evidence.documentId, excerptId: `${evidence.documentId}-passage-1` }));
-    return providerResponse(draft);
+
+    return responseForPass(body, draft);
+
   };
+
   try {
+
     const response = await POST(request(payload));
+
     assert.equal(response.status, 200);
+
     assert.equal(calls.length, 2);
+
     for (const call of calls) {
+
       assert.ok(call.messages[0].content.includes('documentEvidenceCatalogue'));
+
       assert.ok(call.messages[0].content.includes(docs[0].text));
-      assert.match(call.system, /Do not generate a quote field/);
-      assert.equal(call.output_config.format.schema.properties.findings.items.properties.evidence.items.properties.quote, undefined);
+
+      if (call.output_config.format.schema.properties.findings) assert.match(call.system, /Do not generate a quote field/);
+
+      if (call.output_config.format.schema.properties.findings) assert.equal(call.output_config.format.schema.properties.findings.items.properties.evidence.items.properties.quote, undefined);
+      else assert.deepEqual(Object.keys(call.output_config.format.schema.properties), ['issues']);
+
     }
+
     const { report } = await response.json();
+
     assert.equal(report.findings[0].evidence[0].quote, docs[1].text);
+
     assert.equal(report.findings[0].evidence[0].excerptId, undefined);
+
   } finally { global.fetch = original; }
+
 });
+
+
 
 test('official source retrieval uses only configured public URLs, with safe unavailable/unsupported outcomes', async () => {
+
   const original = global.fetch;
+
   const calls = [];
+
   global.fetch = async (url, options) => { calls.push({ url, options }); return new Response('<main><h1>Visa guidance</h1><p>' + 'Funds and documents. '.repeat(25) + '</p></main>', { headers: { 'content-type': 'text/html' } }); };
+
   try {
+
     const retrieved = await getConsularGuidance('United Kingdom', 'Visit / Tourist Visa');
+
     assert.equal(retrieved.status, 'available');
+
     assert.equal(calls.length, 1);
-    assert.ok(calls[0].url.startsWith('https://www.gov.uk/'));
+
+    assert.ok(calls[0].url.startsWith('https\://www.gov.uk/'));
+
     assert.equal(calls[0].options.redirect, 'error');
+
     assert.equal(calls[0].options.cache, 'no-store');
-    assert.equal((await getConsularGuidance('https://untrusted.test', 'Visit / Tourist Visa')).status, 'unsupported');
+
+    assert.equal((await getConsularGuidance('https\://untrusted.test', 'Visit / Tourist Visa')).status, 'unsupported');
+
     assert.equal(calls.length, 1);
+
     global.fetch = async () => { throw new Error('Network unavailable'); };
+
     assert.equal((await getConsularGuidance('Canada', 'Study Permit')).status, 'unavailable');
+
   } finally { global.fetch = original; }
+
 });
+
+
 
 test('request validation rejects duplicate IDs, empty documents, oversized text and invalid routes before any provider call', async () => {
+
   const original = global.fetch;
+
   global.fetch = async () => { throw new Error('Provider must not be called'); };
+
   try {
+
     assert.equal((await POST(request('{'))).status, 400);
+
     assert.equal((await POST(request({}))).status, 400);
+
     assert.equal((await POST(request({ ...payload, country: 'Invalid' }))).status, 400);
+
     assert.equal((await POST(request({ ...payload, documents: [] }))).status, 400);
+
     assert.equal((await POST(request({ ...payload, documents: [docs[0], docs[0]] }))).status, 400);
+
     assert.equal((await POST(request({ ...payload, documents: Array(7).fill(docs[0]) }))).status, 400);
+
     assert.equal((await POST(request({ ...payload, documents: [{ ...docs[0], text: 'x'.repeat(MAX_ASSESSMENT_CHARS + 1) }] }))).status, 413);
+
     assert.equal((await POST(request({ ...payload, documents: [{ ...docs[0], text: 'x'.repeat(MAX_ASSESSMENT_CHARS) }, docs[1]] }))).status, 413);
+
     assert.equal((await POST(request(payload, undefined, { 'content-length': '750001' }))).status, 413);
+
     assert.equal((await POST(request(' '.repeat(750001)))).status, 413);
+
   } finally { global.fetch = original; }
+
 });
+
+
 
 test('API sends all documents and context through two passes and returns only an evidence-checked private report', async () => {
+
   const original = global.fetch;
+
   const calls = [];
+
   global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
+
+    if (url.startsWith('https\://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
+
     const body = JSON.parse(options.body);
+
     calls.push(body);
-    return providerResponse(fixture());
+
+    return responseForPass(body, fixture());
+
   };
+
   try {
+
     const response = await POST(request(payload));
+
     assert.equal(response.status, 200);
+
     assert.equal(response.headers.get('cache-control'), 'private, no-store');
+
     const { report } = await response.json();
+
     assert.equal(report.score, null);
+
     assert.equal(calls.length, 2);
+
     assert.equal(calls[0].output_config.format.type, 'json_schema');
+
     assert.ok(calls[0].messages[0].content.includes(docs[0].text));
+
     assert.ok(calls[0].messages[0].content.includes(docs[1].text));
+
     assert.ok(calls[0].messages[0].content.includes('Nigeria'));
-    assert.ok(calls[1].messages[0].content.includes('Independently audit'));
+
+    assert.ok(calls[1].messages[0].content.includes('Independently scrutinize'));
+    assert.deepEqual(Object.keys(calls[1].output_config.format.schema.properties), ['issues']);
+
     assert.ok(calls[1].messages[0].content.includes(docs[1].text));
+
   } finally { global.fetch = original; }
+
 });
 
+
+
 test('successive reviews work under one paid session without contacting Flutterwave and retired flags cannot unlock unpaid reviews', async () => {
+
   const originalFetch = global.fetch;
+
   const savedMode = process.env.NODE_ENV;
+
   const savedBypass = process.env.CONSULAR_DEV_BYPASS_PAYMENT;
+
+  let providerCalls = 0;
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+    assert.equal(url, 'https\://api.anthropic.com/v1/messages', 'Assessment must not contact the payment provider');
+
+    providerCalls++;
+
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+
+    return responseForPass(JSON.parse(options.body), draft);
+
+  };
+
+  try {
+
+    const paidCookie = `${ACCESS_COOKIE}=${signToken('access', 'successive-paid-reviews')}`;
+
+    for (let index = 0; index < 2; index++) {
+
+      const response = await POST(request(payload, undefined, { cookie: paidCookie }));
+
+      assert.equal(response.status, 200);
+
+      assert.ok((await response.json()).report);
+
+    }
+
+    assert.equal(providerCalls, 4);
+
+    const expiredCookie = `${ACCESS_COOKIE}=${signToken('access', 'expired-review', -1)}`;
+
+    const expired = await POST(request(payload, undefined, { cookie: expiredCookie }));
+
+    assert.equal(expired.status, 402);
+
+    assert.equal(providerCalls, 4);
+
+    process.env.NODE_ENV = 'development';
+
+    process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
+
+    for (let index = 0; index < 2; index++) {
+
+      const response = await POST(request(payload, undefined, { cookie: '' }));
+
+      assert.equal(response.status, 402);
+
+      assert.equal((await response.json()).report, undefined);
+
+    }
+
+    assert.equal(providerCalls, 4);
+
+  } finally {
+
+    global.fetch = originalFetch;
+
+    process.env.NODE_ENV = savedMode;
+
+    if (savedBypass === undefined) delete process.env.CONSULAR_DEV_BYPASS_PAYMENT;
+
+    else process.env.CONSULAR_DEV_BYPASS_PAYMENT = savedBypass;
+
+  }
+
+});
+
+
+
+test('pre-assessment accepts the 60,000-character boundary without truncating either review pass', async () => {
+
+  const original = global.fetch;
+
+  const longText = docs[0].text + 'x'.repeat(MAX_ASSESSMENT_CHARS - docs[0].text.length - docs[1].text.length);
+
+  assert.equal(longText.length + docs[1].text.length, MAX_ASSESSMENT_CHARS);
+
+  const calls = [];
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
+
+    const body = JSON.parse(options.body);
+
+    calls.push(body.messages[0].content);
+
+    return responseForPass(body, fixture());
+
+  };
+
+  try {
+
+    const response = await POST(request({ ...payload, documents: [{ ...docs[0], text: longText }, docs[1]] }));
+
+    assert.equal(response.status, 200);
+
+    assert.equal(calls.length, 2);
+
+    assert.ok(calls.every(content => content.includes(longText)));
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+test('failed, truncated and malformed AI reports never become fallback scores or leak provider errors', async () => {
+
+  const original = global.fetch;
+
+  try {
+
+    for (const mode of ['unavailable', 'truncated', 'malformed', 'invalid-json', 'timeout']) {
+
+      global.fetch = async url => {
+
+        if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+        if (mode === 'timeout') throw new DOMException('secret timeout detail', 'TimeoutError');
+
+        if (mode === 'unavailable') return Response.json({ error: { message: 'secret provider detail' } }, { status: 401 });
+
+        if (mode === 'truncated') return providerResponse(fixture(), 'max_tokens');
+
+        if (mode === 'invalid-json') return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] });
+
+        const draft = fixture(); draft.criteria.pop();
+
+        return providerResponse(draft);
+
+      };
+
+      const response = await POST(request(payload));
+
+      assert.equal(response.status, mode === 'unavailable' ? 503 : mode === 'timeout' ? 504 : 502);
+
+      const body = await response.json();
+
+      assert.equal(body.report, undefined);
+
+      assert.match(body.requestId, /^[a-f0-9-]{36}$/);
+
+      assert.equal(body.code, mode === 'unavailable' ? 'provider_unavailable' : mode === 'timeout' ? 'review_timeout' : mode === 'malformed' ? 'report_validation_failed' : 'review_incomplete');
+
+      assert.ok(!JSON.stringify(body).includes('secret provider detail'));
+
+      assert.ok(!JSON.stringify(body).includes('secret timeout detail'));
+
+      if (mode === 'timeout') {
+
+        assert.equal(body.code, 'review_timeout');
+
+        assert.equal(body.error, 'Session timeout, please retry');
+
+        assert.ok(!body.error.includes('evidence-checked'));
+
+      }
+
+    }
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+test('an output-limit interruption is regenerated once with more space and then independently verified', async () => {
+
+  const original = global.fetch;
+
+  const calls = [];
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+    const body = JSON.parse(options.body); calls.push(body);
+
+    if (calls.length === 1) return providerResponse({ summary: 'Partial content must never be shown.' }, 'max_tokens');
+
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+
+    return responseForPass(body, draft);
+
+  };
+
+  try {
+
+    const response = await POST(request(payload));
+
+    assert.equal(response.status, 200);
+
+    assert.deepEqual(calls.map(call => call.max_tokens), [7000, 14000, 2500]);
+
+    assert.equal(calls[1].messages[0].content, calls[0].messages[0].content);
+
+    assert.ok(calls[2].messages[0].content.includes('Independently scrutinize'));
+
+    const { report } = await response.json();
+
+    assert.ok(!JSON.stringify(report).includes('Partial content'));
+
+    assert.equal(report.proofreading[0].suggested, 'I plan to visit London');
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+test('output-limit retries are independent across passes and refusals are not retried', async () => {
+
+  const original = global.fetch;
+
+
+
+  try {
+
+    for (const mode of ['truncated-across-passes', 'refusal']) {
+
+      let calls = 0;
+
+      const tokenLimits = [];
+
+
+
+      global.fetch = async (url, options) => {
+
+        if (url.startsWith('https\://www.gov.uk/')) {
+
+          throw new Error('Guidance unavailable');
+
+        }
+
+
+
+        calls++;
+
+
+
+        const body = JSON.parse(options.body);
+
+        tokenLimits.push(body.max_tokens);
+
+
+
+        const draft = fixture();
+
+        draft.findings[0].policyEvidence = [];
+
+
+
+        if (mode === 'refusal') {
+
+          return providerResponse(draft, 'refusal');
+
+        }
+
+
+
+        if (calls === 2) {
+
+          return providerResponse(draft, 'end_turn');
+
+        }
+
+
+
+        return providerResponse(draft, 'max_tokens');
+
+      };
+
+
+
+      const response = await POST(request(payload));
+
+
+
+      assert.equal(response.status, 502);
+
+      assert.equal(calls, mode === 'refusal' ? 1 : 4);
+
+
+
+      if (mode === 'truncated-across-passes') {
+
+        assert.deepEqual(
+
+          tokenLimits,
+
+          [7000, 14000, 2500, 5000]
+
+        );
+
+      }
+
+
+
+      const body = await response.json();
+
+
+
+      assert.equal(body.code, 'review_incomplete');
+
+      assert.equal(body.report, undefined);
+
+    }
+
+  } finally {
+
+    global.fetch = original;
+
+  }
+
+});
+
+
+
+test('an unresolved correction reference is flagged without regenerating other verified observations', async () => {
+
+  const original = global.fetch;
+
+  let calls = 0;
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
+
+    calls++;
+
+    const draft = fixture();
+
+    draft.proofreading = [{ documentId: 'document-1', excerptId: 'document-2-passage-1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement without changing facts.' }];
+
+    return responseForPass(JSON.parse(options.body), draft);
+
+  };
+
+  try {
+
+    const response = await POST(request(payload));
+
+    assert.equal(response.status, 200);
+
+    assert.equal(calls, 2);
+
+    const { report } = await response.json();
+
+    assert.equal(report.proofreading.length, 0);
+
+    assert.equal(report.findings.length, 1);
+
+    assert.equal(report.verificationIssues[0].item, 'correction');
+
+    assert.equal(report.verificationIssues[0].code, 'source_unverified');
+
+    assert.equal(report.score, null);
+
+    assert.equal(report.criteria.find(item => item.key === 'writing').status, 'not_assessable');
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+test('report list failures identify the field and limit without exposing applicant text or accepting truncated results', () => {
+
+  const cases = [
+
+    ['documents', 6, draft => { draft.documents = Array(7).fill(draft.documents[0]); }],
+
+    ['criteria', 5, draft => { draft.criteria = Array(6).fill(draft.criteria[0]); }],
+
+    ['findings', 12, draft => { draft.findings = Array(13).fill(draft.findings[0]); }],
+
+    ['proofreading', 12, draft => { draft.proofreading = Array(13).fill(draft.proofreading[0]); }],
+
+    ['missingEvidence', 10, draft => { draft.missingEvidence = Array(11).fill('Private applicant detail'); }],
+
+    ['questions', 8, draft => { draft.questions = Array(9).fill('Private applicant detail'); }],
+
+    ['roadmap', 8, draft => { draft.roadmap = Array(9).fill('Private applicant detail'); }],
+
+    ['limitations', 10, draft => { draft.limitations = Array(11).fill('Private applicant detail'); }],
+
+    ['criteria[0].evidence', 6, draft => { draft.criteria[0].evidence = Array(7).fill(draft.criteria[0].evidence[0]); }],
+
+    ['criteria[0].policyEvidence', 4, draft => { draft.criteria[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); }],
+
+    ['findings[0].evidence', 6, draft => { draft.findings[0].evidence = Array(7).fill(draft.findings[0].evidence[0]); }],
+
+    ['findings[0].policyEvidence', 4, draft => { draft.findings[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); }],
+
+  ];
+
+  for (const [field, max, edit] of cases) {
+
+    const draft = fixture(); edit(draft);
+
+    assert.throws(() => validateReview(draft, docs, guidance), error => {
+
+      assert.ok(error.message.includes(`field ${field} has ${max + 1} items; maximum ${max}.`));
+
+      assert.ok(!error.message.includes('Private applicant detail'));
+
+      return true;
+
+    });
+
+  }
+
+  const malformed = fixture(); malformed.limitations = null;
+
+  assert.throws(() => validateReview(malformed, docs, guidance), /field limitations must be an array/);
+
+});
+
+
+
+test('oversized AI lists receive precise verification and repair feedback and still require a valid complete report', async () => {
+
+  const original = global.fetch;
+
+  const calls = [];
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Guidance unavailable');
+
+    const body = JSON.parse(options.body); calls.push(body);
+
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+
+    if (calls.length === 1) draft.limitations = Array(11).fill('Only supplied text was reviewed.');
+
+    return responseForPass(body, draft);
+
+  };
+
+  try {
+
+    const response = await POST(request(payload));
+
+    assert.equal(response.status, 200);
+
+    assert.equal(calls.length, 3);
+
+    for (const call of calls.slice(0, 2)) {
+
+      assert.match(call.system, /limitations maximum 10/);
+
+      assert.match(call.system, /at most 6 evidence quotations and at most 4 policyEvidence/);
+
+      assert.match(call.output_config.format.schema.properties.limitations.description, /0–10/);
+
+    }
+
+    assert.ok(calls[1].messages[0].content.includes('field limitations has 11 items; maximum 10.'));
+    assert.deepEqual(Object.keys(calls[2].output_config.format.schema.properties), ['issues']);
+
+    assert.equal((await response.json()).report.proofreading[0].suggested, 'I plan to visit London');
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+test('source outages permit a limited evidence review without an eligibility score', async () => {
+
+  const original = global.fetch;
+
+  global.fetch = async (url, options) => {
+
+    if (url.startsWith('https\://www.gov.uk/')) throw new Error('Official source unavailable');
+
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+
+    return responseForPass(JSON.parse(options.body), draft);
+
+  };
+
+  try {
+
+    const response = await POST(request(payload));
+
+    assert.equal(response.status, 200);
+
+    const { report } = await response.json();
+
+    assert.equal(report.guidance.status, 'unavailable');
+
+    assert.equal(report.score, null);
+
+    assert.equal(report.guidance.sources.length, 0);
+
+  } finally { global.fetch = original; }
+
+});
+
+
+
+const { validateAssessmentFiles, readAssessmentFiles, AssessmentAccessError } = load('src/lib/assessmentFiles.ts');
+
+const { readConsularResponse } = load('src/lib/consularResponse.ts');
+
+const documentReader = load('src/lib/documentText.ts');
+
+const { validateOcrResult } = load('src/lib/documentOcr.ts');
+
+const { POST: readScan } = load('src/app/api/document-ocr/route.ts');
+
+
+
+test('exhausted provider credits return a service error without blaming documents or repeating paid requests', async () => {
+  const original = global.fetch;
   let providerCalls = 0;
   global.fetch = async url => {
     if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-    assert.equal(url, 'https://api.anthropic.com/v1/messages', 'Assessment must not contact the payment provider');
     providerCalls++;
-    const draft = fixture(); draft.findings[0].policyEvidence = [];
-    return providerResponse(draft);
+    return Response.json({ error: { message: 'Your credit balance is too low to access the service. Synthetic private marker.' } }, { status: 400 });
   };
   try {
-    const paidCookie = `${ACCESS_COOKIE}=${signToken('access', 'successive-paid-reviews')}`;
-    for (let index = 0; index < 2; index++) {
-      const response = await POST(request(payload, undefined, { cookie: paidCookie }));
-      assert.equal(response.status, 200);
-      assert.ok((await response.json()).report);
-    }
-    assert.equal(providerCalls, 4);
-    const expiredCookie = `${ACCESS_COOKIE}=${signToken('access', 'expired-review', -1)}`;
-    const expired = await POST(request(payload, undefined, { cookie: expiredCookie }));
-    assert.equal(expired.status, 402);
-    assert.equal(providerCalls, 4);
-    process.env.NODE_ENV = 'development';
-    process.env.CONSULAR_DEV_BYPASS_PAYMENT = 'true';
-    for (let index = 0; index < 2; index++) {
-      const response = await POST(request(payload, undefined, { cookie: '' }));
-      assert.equal(response.status, 402);
-      assert.equal((await response.json()).report, undefined);
-    }
-    assert.equal(providerCalls, 4);
-  } finally {
-    global.fetch = originalFetch;
-    process.env.NODE_ENV = savedMode;
-    if (savedBypass === undefined) delete process.env.CONSULAR_DEV_BYPASS_PAYMENT;
-    else process.env.CONSULAR_DEV_BYPASS_PAYMENT = savedBypass;
-  }
-});
-
-test('pre-assessment accepts the 60,000-character boundary without truncating either review pass', async () => {
-  const original = global.fetch;
-  const longText = docs[0].text + 'x'.repeat(MAX_ASSESSMENT_CHARS - docs[0].text.length - docs[1].text.length);
-  assert.equal(longText.length + docs[1].text.length, MAX_ASSESSMENT_CHARS);
-  const calls = [];
-  global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
-    const body = JSON.parse(options.body);
-    calls.push(body.messages[0].content);
-    return providerResponse(fixture());
-  };
-  try {
-    const response = await POST(request({ ...payload, documents: [{ ...docs[0], text: longText }, docs[1]] }));
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 2);
-    assert.ok(calls.every(content => content.includes(longText)));
+    const response = await POST(request(payload));
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.code, 'provider_credit_exhausted');
+    assert.match(body.error, /temporarily unavailable/);
+    assert.equal(body.report, undefined);
+    assert.equal(providerCalls, 1);
+    assert.ok(!JSON.stringify(body).includes('Synthetic private marker'));
+    assert.ok(!/configured model|clearer.*PDF/.test(body.error));
   } finally { global.fetch = original; }
 });
 
-test('failed, truncated and malformed AI reports never become fallback scores or leak provider errors', async () => {
+test('independent audit isolates material concerns and retains unrelated checked observations', async () => {
+  const original = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
+    const body = JSON.parse(options.body); calls.push(body);
+    if (body.output_config.format.schema.properties.issues) {
+      return providerResponse({ issues: [{ section: 'findings', index: 0, reason: 'Unsupported financial inference.' }] });
+    }
+    const draft = fixture(); draft.findings[0].policyEvidence = [];
+    draft.findings.push({ ...structuredClone(draft.findings[0]), title: 'Independently supported observation' });
+    return providerResponse(draft);
+  };
+  try {
+    const response = await POST(request(payload));
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.report.findings.length, 1);
+    assert.equal(body.report.findings[0].title, 'Independently supported observation');
+    assert.equal(body.report.proofreading.length, 1);
+    assert.equal(body.report.verificationIssues[0].item, 'finding');
+    assert.equal(body.report.verificationIssues[0].code, 'audit_unverified');
+    assert.equal(body.report.verificationIssues[0].reason, 'Unsupported financial inference.');
+    assert.equal(body.report.score, null);
+    assert.match(body.report.statusLabel, /Partial review/);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(Object.keys(calls[1].output_config.format.schema.properties), ['issues']);
+    assert.equal(calls[1].max_tokens, 2500);
+    assert.ok(!JSON.stringify(body.report.findings).includes('Unsupported financial inference'));
+  } finally { global.fetch = original; }
+});
+
+test('audit indices refer to the original draft even when earlier source failures remove entries', () => {
+  const draft = fixture();
+  draft.findings[0].policyEvidence = [];
+  const valid = structuredClone(draft.findings[0]);
+  draft.findings = [
+    { ...structuredClone(valid), title: 'Invalid source', evidence: [{ documentId: docs[1].id, quote: 'Fabricated source quotation' }] },
+    { ...structuredClone(valid), title: 'Audited item', body: 'Unsupported semantic conclusion.' },
+    { ...structuredClone(valid), title: 'Retained item' },
+  ];
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section: 'findings', index: 1, reason: 'The source does not establish this conclusion.' }] });
+  assert.deepEqual(parsed.findings.map(item => item.title), ['Retained item']);
+  assert.deepEqual(parsed.verificationIssues.map(item => [item.index, item.code]), [[0, 'source_unverified'], [1, 'audit_unverified']]);
+  const report = finalizeReview(parsed, guidance, docs);
+  assert.equal(report.score, null);
+  assert.ok(!JSON.stringify(report.findings).includes('Unsupported semantic conclusion'));
+});
+
+test('audited document interpretation withholds its dependent observations while retaining other documents', () => {
+  const draft = fixture(); draft.findings[0].policyEvidence = [];
+  draft.findings.push({ ...structuredClone(draft.findings[0]), title: 'Purpose observation', evidence: [{ documentId: docs[0].id, quote: 'I plans to visit London' }] });
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section: 'documents', index: 1, reason: 'This record was misclassified.' }] });
+  assert.equal(parsed.documents[1].relevance, 'uncertain');
+  assert.equal(parsed.documents[1].kind, 'Document type requires review');
+  assert.deepEqual(parsed.findings.map(item => item.title), ['Purpose observation']);
+  assert.equal(parsed.proofreading.length, 1);
+  assert.equal(parsed.criteria.find(item => item.key === 'finances').status, 'not_assessable');
+  assert.ok(parsed.verificationIssues.some(item => item.item === 'document' && item.documentId === docs[1].id));
+});
+
+test('section-wide and omitted-risk audit concerns never disappear or produce readiness', () => {
+  for (const section of ['findings', 'suggestedAdditions', 'summary', 'roadmap']) {
+    const draft = fixture(); draft.findings = []; draft.suggestedAdditions = [];
+    const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section, index: -1, reason: 'Material qualification or risk was omitted.' }] });
+    assert.ok(parsed.verificationIssues.some(item => item.code === 'audit_unverified'));
+    const report = finalizeReview(parsed, guidance, docs);
+    assert.equal(report.score, null);
+    assert.match(report.statusLabel, /Partial review/);
+    assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
+    assert.equal(report.proofreading.length, 1);
+  }
+});
+
+test('an audit concern about one proposed rewrite or addition leaves other wording available', () => {
+  const draft = fixture();
+  draft.proofreading.push({ ...draft.proofreading[0], explanation: 'A second proposed correction.' });
+  draft.suggestedAdditions = [{ documentId: docs[0].id, title: 'Possible context', proposedText: 'The purpose of this statement is [applicant-confirmed purpose].', rationale: 'Possible added context, with no factual claim.', insertionPoint: 'Before the first paragraph, if appropriate.' }];
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section: 'proofreading', index: 0, reason: 'Potential change in meaning.' }, { section: 'suggestedAdditions', index: 0, reason: 'Further factual clarification is needed.' }] });
+  assert.equal(parsed.proofreading.length, 1);
+  assert.equal(parsed.proofreading[0].explanation, 'A second proposed correction.');
+  assert.equal(parsed.suggestedAdditions.length, 0);
+  assert.deepEqual(parsed.verificationIssues.map(item => item.item), ['correction', 'addition']);
+  assert.equal(finalizeReview(parsed, guidance, docs).criteria.find(item => item.key === 'writing').status, 'not_assessable');
+});
+
+test('malformed compact audits never become approved reports', async () => {
   const original = global.fetch;
   try {
-    for (const mode of ['unavailable', 'truncated', 'malformed', 'invalid-json', 'timeout']) {
-      global.fetch = async url => {
+    for (const bad of [{}, { issues: 'none' }, { issues: [{ section: 'findings', index: 0, reason: '' }] }, { issues: [{ section: 'other', index: 0, reason: 'bad' }] }, { issues: [{ section: 'findings', index: 99, reason: 'bad' }] }, { issues: [{ section: 'summary', index: 0, reason: 'bad' }] }, { issues: [{ section: 'criteria', index: -2, reason: 'bad' }] }, { issues: Array(21).fill({ section: 'summary', index: -1, reason: 'bad' }) }]) {
+      global.fetch = async (url, options) => {
         if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-        if (mode === 'timeout') throw new DOMException('secret timeout detail', 'TimeoutError');
-        if (mode === 'unavailable') return Response.json({ error: { message: 'secret provider detail' } }, { status: 401 });
-        if (mode === 'truncated') return providerResponse(fixture(), 'max_tokens');
-        if (mode === 'invalid-json') return Response.json({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json' }] });
-        const draft = fixture(); draft.criteria.pop();
+        const body = JSON.parse(options.body);
+        if (body.output_config.format.schema.properties.issues) return providerResponse(bad);
+        const draft = fixture(); draft.findings[0].policyEvidence = [];
         return providerResponse(draft);
       };
       const response = await POST(request(payload));
-      assert.equal(response.status, mode === 'unavailable' ? 503 : mode === 'timeout' ? 504 : 502);
-      const body = await response.json();
-      assert.equal(body.report, undefined);
-      assert.match(body.requestId, /^[a-f0-9-]{36}$/);
-      assert.equal(body.code, mode === 'unavailable' ? 'provider_unavailable' : mode === 'timeout' ? 'review_timeout' : mode === 'malformed' ? 'report_validation_failed' : 'review_incomplete');
-      assert.ok(!JSON.stringify(body).includes('secret provider detail'));
-      assert.ok(!JSON.stringify(body).includes('secret timeout detail'));
-      if (mode === 'timeout') {
-        assert.equal(body.code, 'review_timeout');
-        assert.equal(body.error, 'Session timeout, please retry');
-        assert.ok(!body.error.includes('evidence-checked'));
-      }
-    }
-  } finally { global.fetch = original; }
-});
-
-test('an output-limit interruption is regenerated once with more space and then independently verified', async () => {
-  const original = global.fetch;
-  const calls = [];
-  global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-    const body = JSON.parse(options.body); calls.push(body);
-    if (calls.length === 1) return providerResponse({ summary: 'Partial content must never be shown.' }, 'max_tokens');
-    const draft = fixture(); draft.findings[0].policyEvidence = [];
-    return providerResponse(draft);
-  };
-  try {
-    const response = await POST(request(payload));
-    assert.equal(response.status, 200);
-    assert.deepEqual(calls.map(call => call.max_tokens), [7000, 14000, 7000]);
-    assert.equal(calls[1].messages[0].content, calls[0].messages[0].content);
-    assert.ok(calls[2].messages[0].content.includes('Independently audit'));
-    const { report } = await response.json();
-    assert.ok(!JSON.stringify(report).includes('Partial content'));
-    assert.equal(report.proofreading[0].suggested, 'I plan to visit London');
-  } finally { global.fetch = original; }
-});
-
-test('the output-limit retry budget is shared across passes and refusals are not retried', async () => {
-  const original = global.fetch;
-  try {
-    for (const mode of ['truncated-across-passes', 'refusal']) {
-      let calls = 0;
-      global.fetch = async url => {
-        if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-        calls++;
-        const draft = fixture(); draft.findings[0].policyEvidence = [];
-        return providerResponse(draft, mode === 'refusal' ? 'refusal' : calls === 2 ? 'end_turn' : 'max_tokens');
-      };
-      const response = await POST(request(payload));
       assert.equal(response.status, 502);
-      assert.equal(calls, mode === 'refusal' ? 1 : 3);
       const body = await response.json();
       assert.equal(body.code, 'review_incomplete');
       assert.equal(body.report, undefined);
-      assert.ok(!body.error.includes('Payment'));
     }
   } finally { global.fetch = original; }
 });
-
-test('an unresolved correction reference is flagged without regenerating other verified observations', async () => {
-  const original = global.fetch;
-  let calls = 0;
-  global.fetch = async url => {
-    if (url.startsWith('https://www.gov.uk/')) return new Response(`<main><h1>Guidance</h1>${source.text} ${'Read the relevant route guidance. '.repeat(20)}</main>`, { headers: { 'content-type': 'text/html' } });
-    calls++;
-    const draft = fixture();
-    draft.proofreading = [{ documentId: 'document-1', excerptId: calls === 2 ? 'document-2-passage-1' : 'document-1-passage-1', suggested: docs[0].text.replace('I plans', 'I plan'), explanation: 'Correct subject-verb agreement without changing facts.' }];
-    return providerResponse(draft);
-  };
-  try {
-    const response = await POST(request(payload));
-    assert.equal(response.status, 200);
-    assert.equal(calls, 2);
-    const { report } = await response.json();
-    assert.equal(report.proofreading.length, 0);
-    assert.equal(report.findings.length, 1);
-    assert.equal(report.verificationIssues[0].item, 'correction');
-    assert.equal(report.verificationIssues[0].code, 'source_unverified');
-    assert.equal(report.score, null);
-    assert.equal(report.criteria.find(item => item.key === 'writing').status, 'not_assessable');
-  } finally { global.fetch = original; }
-});
-
-test('report list failures identify the field and limit without exposing applicant text or accepting truncated results', () => {
-  const cases = [
-    ['documents', 6, draft => { draft.documents = Array(7).fill(draft.documents[0]); }],
-    ['criteria', 5, draft => { draft.criteria = Array(6).fill(draft.criteria[0]); }],
-    ['findings', 12, draft => { draft.findings = Array(13).fill(draft.findings[0]); }],
-    ['proofreading', 12, draft => { draft.proofreading = Array(13).fill(draft.proofreading[0]); }],
-    ['missingEvidence', 10, draft => { draft.missingEvidence = Array(11).fill('Private applicant detail'); }],
-    ['questions', 8, draft => { draft.questions = Array(9).fill('Private applicant detail'); }],
-    ['roadmap', 8, draft => { draft.roadmap = Array(9).fill('Private applicant detail'); }],
-    ['limitations', 10, draft => { draft.limitations = Array(11).fill('Private applicant detail'); }],
-    ['criteria[0].evidence', 6, draft => { draft.criteria[0].evidence = Array(7).fill(draft.criteria[0].evidence[0]); }],
-    ['criteria[0].policyEvidence', 4, draft => { draft.criteria[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); }],
-    ['findings[0].evidence', 6, draft => { draft.findings[0].evidence = Array(7).fill(draft.findings[0].evidence[0]); }],
-    ['findings[0].policyEvidence', 4, draft => { draft.findings[0].policyEvidence = Array(5).fill(draft.findings[0].policyEvidence[0]); }],
-  ];
-  for (const [field, max, edit] of cases) {
-    const draft = fixture(); edit(draft);
-    assert.throws(() => validateReview(draft, docs, guidance), error => {
-      assert.ok(error.message.includes(`field ${field} has ${max + 1} items; maximum ${max}.`));
-      assert.ok(!error.message.includes('Private applicant detail'));
-      return true;
-    });
-  }
-  const malformed = fixture(); malformed.limitations = null;
-  assert.throws(() => validateReview(malformed, docs, guidance), /field limitations must be an array/);
-});
-
-test('oversized AI lists receive precise verification and repair feedback and still require a valid complete report', async () => {
-  const original = global.fetch;
-  const calls = [];
-  global.fetch = async (url, options) => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
-    const body = JSON.parse(options.body); calls.push(body);
-    const draft = fixture(); draft.findings[0].policyEvidence = [];
-    if (calls.length < 3) draft.limitations = Array(11).fill('Only supplied text was reviewed.');
-    return providerResponse(draft);
-  };
-  try {
-    const response = await POST(request(payload));
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 3);
-    for (const call of calls) {
-      assert.match(call.system, /limitations maximum 10/);
-      assert.match(call.system, /at most 6 evidence quotations and at most 4 policyEvidence/);
-      assert.match(call.output_config.format.schema.properties.limitations.description, /0–10/);
-    }
-    for (const call of calls.slice(1)) assert.ok(call.messages[0].content.includes('field limitations has 11 items; maximum 10.'));
-    assert.equal((await response.json()).report.proofreading[0].suggested, 'I plan to visit London');
-  } finally { global.fetch = original; }
-});
-
-test('source outages permit a limited evidence review without an eligibility score', async () => {
-  const original = global.fetch;
-  global.fetch = async url => {
-    if (url.startsWith('https://www.gov.uk/')) throw new Error('Official source unavailable');
-    const draft = fixture(); draft.findings[0].policyEvidence = [];
-    return providerResponse(draft);
-  };
-  try {
-    const response = await POST(request(payload));
-    assert.equal(response.status, 200);
-    const { report } = await response.json();
-    assert.equal(report.guidance.status, 'unavailable');
-    assert.equal(report.score, null);
-    assert.equal(report.guidance.sources.length, 0);
-  } finally { global.fetch = original; }
-});
-
-const { validateAssessmentFiles, readAssessmentFiles, AssessmentAccessError } = load('src/lib/assessmentFiles.ts');
-const { readConsularResponse } = load('src/lib/consularResponse.ts');
-const documentReader = load('src/lib/documentText.ts');
-const { validateOcrResult } = load('src/lib/documentOcr.ts');
-const { POST: readScan } = load('src/app/api/document-ocr/route.ts');
 
 test('selecting assessment files validates metadata without reading content or sending requests', () => {
+
   let reads = 0;
+
   const file = { name: 'scanned-deed.pdf', size: 100, text: () => { reads++; throw new Error('Must not read during selection'); }, arrayBuffer: () => { reads++; throw new Error('Must not read during selection'); } };
+
   validateAssessmentFiles([file]);
+
   assert.equal(reads, 0);
+
   assert.throws(() => validateAssessmentFiles([]), /Select/);
+
   assert.throws(() => validateAssessmentFiles(Array(7).fill(file)), /6 documents/);
+
   assert.throws(() => validateAssessmentFiles([{ ...file, size: 0 }]), /empty/);
+
   assert.throws(() => validateAssessmentFiles([{ ...file, size: 10 * 1024 * 1024 + 1 }]), /10MB/);
+
   assert.throws(() => validateAssessmentFiles([{ ...file, name: 'image.exe' }]), /Choose/);
+
 });
+
+
 
 test('Proofread reads selected TXT documents in full and rejects excess text and cancelled processing', async () => {
+
   const signal = new AbortController().signal;
+
   const files = docs.map(doc => new File([doc.text], doc.name));
+
   assert.deepEqual(await readAssessmentFiles(files, signal), docs);
+
   await assert.rejects(readAssessmentFiles([new File(['x'.repeat(60001)], 'long.txt')], signal), /60,000/);
+
   await assert.rejects(readAssessmentFiles([new File(['x'.repeat(40000)], 'one.txt'), new File(['y'.repeat(30000)], 'two.txt')], signal), /60,000/);
+
   const cancelled = new AbortController(); cancelled.abort();
+
   await assert.rejects(readAssessmentFiles(files, cancelled.signal), /abort/i);
+
 });
+
+
 
 test('Proofread processes an entire scan internally, propagates uncertainty and access expiry, and discards late results after cancellation', async () => {
+
   const originalReader = documentReader.extractDocumentText, originalFetch = global.fetch;
+
   documentReader.extractDocumentText = async () => { throw new documentReader.ScannedPdfError(1); };
+
   const file = new File(['synthetic'], 'deed.pdf');
+
   const scan = { text: '[Page 1]\nDEED OF ASSIGHMENT\nPlot [unclear], Lagos', notes: ['Page 1: Plot number is unclear.'], pageCount: 1 };
+
   const calls = [];
+
   global.fetch = async (url, options) => { calls.push({ url, options }); return Response.json(scan); };
+
   try {
+
     const documents = await readAssessmentFiles([file], new AbortController().signal);
+
     assert.equal(calls.length, 1);
+
     assert.equal(calls[0].url, '/api/document-ocr');
+
     assert.equal(calls[0].options.body, file);
+
     assert.deepEqual(documents, [{ id: 'document-1', name: 'deed.pdf', text: scan.text, extraction: 'ocr', ocrNotes: scan.notes }]);
+
     assert.equal(documents[0].ocrConfirmed, undefined, 'Must not claim a user checked the text');
+
     global.fetch = async () => Response.json({ error: 'Payment required' }, { status: 402 });
+
     await assert.rejects(readAssessmentFiles([file], new AbortController().signal), AssessmentAccessError);
+
     global.fetch = async () => Response.json({ code: 'review_timeout', error: 'Session timeout, please retry' }, { status: 504 });
+
     await assert.rejects(readAssessmentFiles([file], new AbortController().signal), error => error.message === 'Session timeout, please retry');
+
     const controller = new AbortController();
+
     global.fetch = async () => { controller.abort(); return Response.json(scan); };
+
     await assert.rejects(readAssessmentFiles([file], controller.signal), /abort/i);
+
   } finally { documentReader.extractDocumentText = originalReader; global.fetch = originalFetch; }
+
 });
+
+
 
 test('consular responses preserve API JSON and turn hosting HTML, empty and malformed bodies into controlled HTTP diagnostics', async () => {
+
   const report = { report: { summary: 'Synthetic review' }, requestId: 'synthetic-reference' };
+
   assert.deepEqual(await readConsularResponse(Response.json(report), 'review'), report);
+
   const failure = { error: 'Provider is busy', code: 'provider_unavailable' };
+
   assert.deepEqual(await readConsularResponse(Response.json(failure, { status: 503 }), 'review'), failure);
 
+
+
   for (const [status, expected] of [[413, /upload size/], [403, /blocked/], [404, /deployment/], [405, /deployment/], [429, /Too many requests/], [502, /temporarily unavailable/], [503, /temporarily unavailable/], [200, /unexpected response/]]) {
+
     for (const service of ['scan', 'review']) {
+
       const endpoint = service === 'scan' ? '/api/document-ocr' : '/api/ai-consular-check';
+
       await assert.rejects(readConsularResponse(new Response('<html><h1>Private proxy details</h1></html>', { status, headers: { 'content-type': 'text/html' } }), service), error => {
+
         assert.match(error.message, expected);
+
         assert.ok(error.message.includes(`${endpoint}, HTTP ${status}`));
+
         assert.ok(!/Private proxy|Unexpected token|<html>/.test(error.message));
+
         return true;
+
       });
+
     }
+
   }
+
   for (const body of ['', '{', 'null', '[]']) {
+
     await assert.rejects(readConsularResponse(new Response(body), 'scan'), /unexpected response.*HTTP 200/);
+
   }
+
   for (const status of [408, 504]) {
+
     const timeout = await readConsularResponse(new Response('<html>Gateway timeout</html>', { status }), 'scan');
+
     assert.equal(timeout.code, 'review_timeout');
+
     assert.match(timeout.error, /timed out/);
+
     assert.ok(timeout.error.includes(`HTTP ${status}`));
+
   }
+
 });
+
+
 
 test('Proofread handles production HTML upload failures and access expiry without exposing parser errors or accepting partial documents', async () => {
+
   const originalReader = documentReader.extractDocumentText, originalFetch = global.fetch;
+
   documentReader.extractDocumentText = async () => { throw new documentReader.ScannedPdfError(1); };
+
   const file = new File(['synthetic'], 'PROOF OF FUNDS.pdf');
+
   try {
+
     for (const status of [401, 402]) {
+
       global.fetch = async () => new Response('<html>Payment required</html>', { status });
+
       await assert.rejects(readAssessmentFiles([file], new AbortController().signal), AssessmentAccessError);
+
     }
+
     for (const status of [403, 413, 502]) {
+
       global.fetch = async () => new Response('<html>Private proxy details</html>', { status });
+
       await assert.rejects(readAssessmentFiles([file], new AbortController().signal), error => {
+
         assert.ok(error.message.startsWith('PROOF OF FUNDS.pdf: '));
+
         assert.ok(error.message.includes(`/api/document-ocr, HTTP ${status}`));
+
         assert.ok(!/Private proxy|Unexpected token|<html>/.test(error.message));
+
         return true;
+
       });
+
     }
+
     global.fetch = async () => new Response('<html>Gateway timeout</html>', { status: 504 });
+
     await assert.rejects(readAssessmentFiles([file], new AbortController().signal), error => /timed out/.test(error.message) && !error.message.includes(file.name));
+
     global.fetch = async () => new Response('<html>Unexpected success page</html>');
+
     await assert.rejects(readAssessmentFiles([file], new AbortController().signal), /unexpected response.*HTTP 200/);
+
   } finally { documentReader.extractDocumentText = originalReader; global.fetch = originalFetch; }
+
 });
+
+
 
 test('scan reader requires every physical page, preserves original facts, rejects unreadable or truncated data and withholds unchecked-scan scores', () => {
+
   const pages = [{ page: 1, status: 'readable', text: 'DEED OF ASSIGHMENT\nNGN 2,500,000\n12 March 2026', notes: [] }, { page: 2, status: 'partial', text: 'Plot [unclear], Lagos', notes: ['Plot number is obscured.'] }];
+
   const result = validateOcrResult({ pages }, 2);
+
   assert.ok(result.text.includes('DEED OF ASSIGHMENT\nNGN 2,500,000\n12 March 2026'));
+
   assert.ok(result.notes.some(note => note.includes('Plot number')));
+
   assert.throws(() => validateOcrResult({ pages: pages.slice(0,1) }, 2), /every page/);
+
   assert.throws(() => validateOcrResult({ pages: [pages[0], pages[0]] }, 2), /page information/);
+
   assert.throws(() => validateOcrResult({ pages: [pages[0], { ...pages[1], status: 'unreadable' }] }, 2), /Page 2 is too unclear/);
+
   assert.throws(() => validateOcrResult({ pages: [{ ...pages[0], text: 'x'.repeat(60001) }] }, 1), /60,000/);
+
   const signaturePage = { page: 2, status: 'signature_only', text: '', notes: ['Signature mark at the bottom-right signing area; name is not legible.'] };
+
   const signed = validateOcrResult({ pages: [pages[0], signaturePage] }, 2);
+
   assert.ok(signed.text.includes('[Page 2]\n[Signature mark; signer and authenticity unverified]'));
+
   assert.ok(signed.notes.some(note => note.includes('bottom-right')));
+
   assert.throws(() => validateOcrResult({ pages: [pages[0], { ...signaturePage, text: 'Guessed signer name' }] }, 2), /conflicting signature/);
+
   assert.throws(() => validateOcrResult({ pages: [{ ...signaturePage, page: 1 }] }, 1), /No readable text/);
+
   const draft = validateReview(fixture(), docs, guidance);
+
   draft.criteria.forEach(criterion => { criterion.status = 'supported'; });
+
   assert.ok(finalizeReview(draft, guidance).score !== null);
+
   const report = finalizeReview(draft, guidance, [{ ...docs[0], extraction: 'ocr', ocrNotes: [] }]);
+
   assert.equal(report.score, null);
+
   assert.ok(report.limitations.some(value => value.includes('not been independently confirmed')));
+
   assert.ok(finalizeReview(draft, guidance, [{ ...docs[0], extraction: 'ocr', ocrNotes: signed.notes }]).limitations.some(value => value.includes('bottom-right')));
+
 });
+
+
 
 test('signature and unclear-handwriting annotations cannot become proofreading corrections', () => {
+
   const marker = '[Signature mark; signer and authenticity unverified]';
+
   const documents = [{ ...docs[0], text: `${docs[0].text}\nWitness name: [unclear]\n${marker}` }, docs[1]];
+
   const draft = fixture();
+
   draft.proofreading.push(
+
     { documentId: 'document-1', original: '[unclear]', suggested: '[clear]', explanation: 'Attempted interpretation of an unclear field.' },
+
     { documentId: 'document-1', original: marker, suggested: marker.slice(1,-1), explanation: 'Attempted formatting of a signature annotation.' },
+
   );
+
   const report = validateReview(draft, documents, guidance);
+
   assert.equal(report.proofreading.length, 1);
+
   assert.equal(report.proofreading[0].suggested, 'I plan to visit London');
+
   assert.ok(report.limitations.some(value => value.includes('reading annotations')));
+
 });
 
+
+
 test('scan endpoint validates paid access and real PDF contents, sends all original pages, and never accepts incomplete provider output', async () => {
+
   const { PDFDocument } = require('pdf-lib');
+
   const pdf = await PDFDocument.create(); pdf.addPage(); pdf.addPage();
+
   const bytes = Buffer.from(await pdf.save());
-  const scanRequest = (body, paid = true, headers = {}) => new NextRequest('https://site.test/api/document-ocr', { method: 'POST', headers: { 'content-type': 'application/pdf', ...(paid ? { cookie: `${ACCESS_COOKIE}=${signToken('access', `scan-${Math.random()}`)}` } : {}), ...headers }, body });
+
+  const scanRequest = (body, paid = true, headers = {}) => new NextRequest('https\://site.test/api/document-ocr', { method: 'POST', headers: { 'content-type': 'application/pdf', ...(paid ? { cookie: `${ACCESS_COOKIE}=${signToken('access', `scan-${Math.random()}`)}` } : {}), ...headers }, body });
+
   const original = global.fetch;
+
   global.fetch = async () => { throw new Error('Provider must not be called'); };
+
   try {
+
     assert.equal((await readScan(scanRequest(bytes, false))).status, 402);
+
     assert.equal((await readScan(scanRequest(Buffer.from('not PDF')))).status, 400);
+
     assert.equal((await readScan(scanRequest(bytes, true, { 'content-length': '10485761' }))).status, 413);
+
     let sent;
+
     const pages = [{ page: 1, status: 'readable', text: 'Deed text', notes: [] }, { page: 2, status: 'readable', text: 'Witness text', notes: [] }];
+
     global.fetch = async (url, options) => { sent = JSON.parse(options.body); return providerResponse({ pages }); };
+
     const response = await readScan(scanRequest(bytes));
+
     assert.equal(response.status, 200);
+
     assert.equal(response.headers.get('cache-control'), 'private, no-store');
+
     assert.deepEqual(Buffer.from(sent.messages[0].content[0].source.data, 'base64'), bytes);
+
     assert.equal((await response.json()).pageCount, 2);
+
     global.fetch = async () => providerResponse({ pages: pages.slice(0, 1) });
+
     assert.equal((await readScan(scanRequest(bytes))).status, 422);
+
     global.fetch = async () => providerResponse({ pages }, 'max_tokens');
+
     assert.equal((await readScan(scanRequest(bytes))).status, 502);
+
     global.fetch = async () => { throw new DOMException('secret timeout detail', 'TimeoutError'); };
+
     const timeout = await readScan(scanRequest(bytes));
+
     assert.equal(timeout.status, 504);
+
     assert.equal((await timeout.json()).error, 'Session timeout, please retry');
+
   } finally { global.fetch = original; }
+
 });
