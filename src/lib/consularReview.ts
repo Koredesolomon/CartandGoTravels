@@ -22,6 +22,28 @@ export const CRITERIA = {
 } as const;
 type CriterionKey = keyof typeof CRITERIA;
 type CriterionStatus = "supported" | "partial" | "missing" | "not_applicable" | "not_assessable";
+export type VerificationImpact = "wording" | "evidence" | "broader_review";
+type VerificationCode = "source_unverified" | "audit_unverified" | "unsafe_wording";
+type DraftVerificationIssue = {
+  item: "document" | "criterion" | "finding" | "correction" | "addition" | "assessment";
+  index: number;
+  code: VerificationCode;
+  impact: VerificationImpact;
+  // Internal diagnostic data. Neither reason nor label may be copied to a
+  // public report; an auditor's explanation is not a verified observation.
+  reason: string;
+  documentId?: string;
+  label?: string;
+};
+type ReportVerificationIssue = Pick<DraftVerificationIssue, "item" | "index" | "code" | "impact" | "documentId"> & { reason: string };
+const verificationMessages: Record<VerificationCode, string> = {
+  source_unverified: "The supporting source could not be verified. This item was withheld; check the original document or request a human review.",
+  audit_unverified: "Independent review could not confirm this item. It was withheld; check the original document or request a human review.",
+  unsafe_wording: "The proposed wording did not pass factual or legal safeguards. It was withheld; request suitable wording.",
+};
+export function verificationIssueMessage(code: VerificationCode): string {
+  return verificationMessages[code];
+}
 export type ReviewDraft = {
   summary: string;
   documents: { id: string; kind: string; relevance: "relevant" | "uncertain" | "unrelated"; explanation: string }[];
@@ -29,13 +51,15 @@ export type ReviewDraft = {
   findings: { type: "risk" | "weak" | "excellent"; title: string; body: string; evidence: Evidence[]; policyEvidence: PolicyEvidence[] }[];
   proofreading: { documentId: string; original: string; suggested: string; explanation: string; requiresLegalReview: boolean }[];
   suggestedAdditions: { documentId: string; title: string; proposedText: string; rationale: string; insertionPoint: string; requiresLegalReview: boolean }[];
-  verificationIssues: { item: "document" | "criterion" | "finding" | "correction" | "addition" | "assessment"; index: number; code: "source_unverified" | "audit_unverified" | "unsafe_wording"; reason: string; documentId?: string; label?: string }[];
+  verificationIssues: DraftVerificationIssue[];
   missingEvidence: string[];
   questions: string[];
   roadmap: string[];
   limitations: string[];
 };
-export type ConsularReport = ReviewDraft & {
+export type ConsularReport = Omit<ReviewDraft, "verificationIssues"> & {
+  verificationIssues: ReportVerificationIssue[];
+  reviewStatus: "complete" | "wording_partial" | "evidence_partial" | "broader_review_required";
   score: number | null;
   statusLabel: string;
   guidance: Omit<Guidance, "sources"> & { sources: Omit<OfficialSource, "text" | "excerpts">[] };
@@ -201,15 +225,18 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
   const auditSections = { document: "documents", criterion: "criteria", finding: "findings", correction: "proofreading", addition: "suggestedAdditions", assessment: "summary" } as const;
   const concerns = (section: ReviewAuditIssue["section"], index: number) => (options.auditIssues ?? []).filter(issue => issue.section === section && (issue.index === index || issue.index === -1));
   const independently = <T>(item: ReviewDraft["verificationIssues"][number]["item"], index: number, parse: () => T, documentId?: string, label?: string, dependentDocuments: string[] = documentId ? [documentId] : []): T | undefined => {
+    const issues = concerns(auditSections[item], index);
+    const classificationFailed = dependentDocuments.some(id => auditedDocuments.has(id));
+    const impact: VerificationImpact = issues.some(issue => issue.index === -1) || item === "assessment" ? "broader_review"
+      : classificationFailed || !["correction", "addition"].includes(item) ? "evidence" : "wording";
     try {
-      const issues = concerns(auditSections[item], index);
       if (issues.length) throw new AuditConcernError(issues.map(issue => issue.reason).join(" ").slice(0, 2000));
-      if (dependentDocuments.some(id => auditedDocuments.has(id))) throw new AuditConcernError("This item depends on a document whose classification or interpretation was questioned by the independent review. Review the original before relying on this item.");
+      if (classificationFailed) throw new AuditConcernError("This item depends on a document whose classification or interpretation was questioned by the independent review. Review the original before relying on this item.");
       return parse();
     }
     catch (error) {
       if (!options.recoverItems || !(error instanceof SourceVerificationError || error instanceof AuditConcernError)) throw error;
-      verificationIssues.push({ item, index, code: error instanceof AuditConcernError ? "audit_unverified" : "source_unverified", reason: error instanceof AuditConcernError ? error.details : error.message, ...(documents.some(doc => doc.id === documentId) ? { documentId } : {}), ...(label ? { label } : {}) });
+      verificationIssues.push({ item, index, code: error instanceof AuditConcernError ? "audit_unverified" : "source_unverified", impact, reason: error instanceof AuditConcernError ? error.details : error.message, ...(documents.some(doc => doc.id === documentId) ? { documentId } : {}), ...(label ? { label } : {}) });
       return undefined;
     }
   };
@@ -290,16 +317,16 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
     const issues = concerns("documents", index);
     if (!issues.length) continue;
     auditedDocuments.add(doc.id);
-    verificationIssues.push({ item: "document", index, code: "audit_unverified", documentId: doc.id, label: "Document interpretation", reason: issues.map(issue => issue.reason).join(" ").slice(0, 2000) });
+    verificationIssues.push({ item: "document", index, code: "audit_unverified", impact: issues.some(issue => issue.index === -1) ? "broader_review" : "evidence", documentId: doc.id, label: "Document interpretation", reason: issues.map(issue => issue.reason).join(" ").slice(0, 2000) });
     doc.kind = "Document type requires review";
     doc.relevance = "uncertain";
     doc.explanation = "The independent review questioned this document's classification or interpretation. Conclusions depending on it were withheld pending review of the original.";
   }
   for (const issue of options.auditIssues ?? []) {
-    if (["summary", "missingEvidence", "questions", "roadmap", "limitations"].includes(issue.section)) verificationIssues.push({ item: "assessment", index: issue.index, code: "audit_unverified", label: issue.section === "summary" ? "Overall summary" : "Overall conclusions and next steps", reason: issue.reason });
+    if (["summary", "missingEvidence", "questions", "roadmap", "limitations"].includes(issue.section)) verificationIssues.push({ item: "assessment", index: issue.index, code: "audit_unverified", impact: "broader_review", label: issue.section === "summary" ? "Overall summary" : "Overall conclusions and next steps", reason: issue.reason });
     // A section-wide concern must remain visible even if that section is empty
     // (for example, an omitted material risk has no finding index to remove).
-    else if (issue.index === -1 && (input[issue.section] === undefined || Array.isArray(input[issue.section]) && (input[issue.section] as unknown[]).length === 0)) verificationIssues.push({ item: "assessment", index: -1, code: "audit_unverified", label: "Section requires review", reason: issue.reason });
+    else if (issue.index === -1 && (input[issue.section] === undefined || Array.isArray(input[issue.section]) && (input[issue.section] as unknown[]).length === 0)) verificationIssues.push({ item: "assessment", index: -1, code: "audit_unverified", impact: "broader_review", label: "Section requires review", reason: issue.reason });
   }
   const criteria = rawCriteria.map((entry, index) => independently("criterion", index, () => {
     const parsed = { ...entry, evidence: evidence(entry.evidence), policyEvidence: policyEvidence(entry.policyEvidence) };
@@ -334,7 +361,7 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
     && JSON.stringify(item.original.match(annotationPattern) ?? []) === JSON.stringify(item.suggested.match(annotationPattern) ?? [])
     && proofreadingPreservesFacts(item.original, item.suggested)
     && (!item.requiresLegalReview || legalTermsPreserved(item.original, item.suggested));
-    if (!safe) { verificationIssues.push({ item: "correction", index: item.index, documentId: item.documentId, code: "unsafe_wording", reason: "Proposed wording was withheld because it changed protected facts, commitments, legal terms or reading annotations." }); return []; }
+    if (!safe) { verificationIssues.push({ item: "correction", index: item.index, documentId: item.documentId, code: "unsafe_wording", impact: "wording", reason: "Proposed wording was withheld because it changed protected facts, commitments, legal terms or reading annotations." }); return []; }
     return [{ documentId: item.documentId, original: item.original, suggested: item.suggested, explanation: item.explanation, requiresLegalReview: item.requiresLegalReview }];
   });
   const suggestedAdditions = rawAdditions.flatMap((entry, index) => {
@@ -343,11 +370,11 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
       if (!doc) throw new SourceVerificationError("Unknown document for suggested addition.");
       if (entry.original !== undefined || entry.excerptId !== undefined) throw new SourceVerificationError("Suggested additions cannot include an original quotation or source passage ID.");
       return { documentId: entry.documentId, title: entry.title, proposedText: entry.proposedText, rationale: entry.rationale, insertionPoint: entry.insertionPoint, requiresLegalReview: legalDocument(entry.documentId) };
-    }, entry.documentId, entry.title);
+    }, entry.documentId, entry.title, [entry.documentId]);
     if (!parsed) return [];
     const doc = documents.find(doc => doc.id === entry.documentId)!;
     if (!additionFactsSupported(doc.text, parsed.proposedText) || issuerControlled(entry.documentId)) {
-      verificationIssues.push({ item: "addition", index, documentId: entry.documentId, label: entry.title, code: "unsafe_wording", reason: "The proposed addition was withheld because it introduced unsupported facts or changed an issuer-controlled record. Use placeholders and obtain appropriate review." });
+      verificationIssues.push({ item: "addition", index, documentId: entry.documentId, label: entry.title, code: "unsafe_wording", impact: "wording", reason: "The proposed addition was withheld because it introduced unsupported facts or changed an issuer-controlled record. Use placeholders and obtain appropriate review." });
       return [];
     }
     return [parsed];
@@ -357,31 +384,55 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
 }
 
 export function finalizeReview(draft: ReviewDraft, guidance: Guidance, documents: AssessmentDocument[] = []): ConsularReport {
-  const unverified = draft.verificationIssues.filter(item => item.code === "source_unverified" || item.code === "audit_unverified");
-  const incompleteEvidence = unverified.length > 0;
-  const assessmentEvidenceFailed = unverified.some(item => ["criterion", "finding", "document", "assessment"].includes(item.item));
+  const { verificationIssues: internalIssues, ...reviewedDraft } = draft;
+  const hasIssues = internalIssues.length > 0;
+  const reviewStatus: ConsularReport["reviewStatus"] = internalIssues.some(item => item.impact === "broader_review") ? "broader_review_required"
+    : internalIssues.some(item => item.impact === "evidence") ? "evidence_partial" : hasIssues ? "wording_partial" : "complete";
+  const wordingOnly = reviewStatus === "wording_partial";
+  const assessmentEvidenceFailed = reviewStatus === "evidence_partial" || reviewStatus === "broader_review_required";
+  // Allowlist public fields and use fixed explanations. Keeping raw reasons
+  // out of the UI alone would still expose them in API and background results.
+  const verificationIssues: ReportVerificationIssue[] = internalIssues.map(item => ({
+    item: item.item, index: item.index, code: item.code, impact: item.impact,
+    reason: verificationIssueMessage(item.code),
+    ...(item.documentId ? { documentId: item.documentId } : {}),
+  }));
   // Aggregate conclusions and free-form action lists can depend on a failed
   // finding even when they contain no citation of their own. Preserve checked
-  // observations, but do not repeat those dependent conclusions as verified.
-  const criteria = draft.criteria.map(item => assessmentEvidenceFailed || unverified.some(issue => issue.item === "correction") && item.key === "writing" ? { ...item, status: "not_assessable" as const, reason: "This criterion's conclusion is withheld pending review of the unverified items. Any source quotations shown below were independently verified." } : item);
-  const safeDraft = incompleteEvidence ? {
-    ...draft,
-    summary: `Reviewed ${draft.documents.length} supplied document(s). ${draft.findings.length} independently verified finding(s) and ${draft.proofreading.length} checked wording suggestion(s) remain available. ${unverified.length} item(s) could not be verified and were withheld. Overall conclusions and readiness are withheld pending review of those items.`,
+  // observations, but do not repeat dependent conclusions as verified. Wording
+  // failures qualify writing only; evidence failures still withhold aggregate
+  // criterion conclusions because their finding dependencies are not tracked.
+  const criteria = draft.criteria.map(item => assessmentEvidenceFailed || hasIssues && item.key === "writing" ? {
+    ...item, status: "not_assessable" as const,
+    reason: wordingOnly ? "The writing assessment is incomplete because some proposed wording could not be confirmed. Other checked evidence assessments remain available."
+      : "This criterion's conclusion is withheld pending review of the unverified items. Any source quotations shown below were independently verified.",
+  } : item);
+  const checkedSummary = `Reviewed ${draft.documents.length} supplied document(s). ${draft.findings.length} source-checked finding(s) and ${draft.proofreading.length + draft.suggestedAdditions.length} checked wording suggestion(s) remain available.`;
+  const safeDraft = hasIssues ? {
+    ...reviewedDraft,
+    summary: wordingOnly ? `${checkedSummary} Writing review is partial: ${internalIssues.length} wording item(s) were withheld. Other checked evidence assessments remain available.`
+      : `${checkedSummary} ${internalIssues.length} item(s) could not be verified and were withheld. Overall conclusions and readiness are withheld pending ${reviewStatus === "broader_review_required" ? "broader human review" : "review of those items"}.`,
     criteria,
     missingEvidence: [],
     questions: [],
-    roadmap: ["Check the retained findings and wording suggestions against the original documents.", "Review the flagged items using the original document or a clearer copy.", "Ask a qualified reviewer to resolve the unverified items before relying on an overall assessment."],
-    limitations: ["Some source references or interpretations could not be verified after recovery and independent review. The affected items and potentially dependent conclusions were withheld; other independently checked findings remain available."],
-  } : draft;
+    roadmap: wordingOnly ? ["Check the retained evidence observations against the original documents.", "Review the withheld wording using the original passage and confirm any proposed facts.", "Ask a qualified reviewer to complete the writing review before relying on a readiness score."]
+      : ["Check the retained findings and wording suggestions against the original documents.", "Review the flagged items using the original document or a clearer copy.", "Ask a qualified reviewer to resolve the unverified items before relying on an overall assessment."],
+    limitations: [wordingOnly ? "Some proposed wording was withheld. The writing assessment and readiness score remain incomplete; other checked evidence assessments are retained."
+      : reviewStatus === "broader_review_required" ? "Broader human review is required before relying on this report. Retained observations do not resolve the section-wide or overall concerns."
+        : "Some source references or interpretations could not be verified. The affected items and potentially dependent conclusions were withheld; other checked observations remain available."],
+  } : reviewedDraft;
   const hasRisk = draft.findings.some(item => item.type === "risk");
   const hasScan = documents.some(doc => doc.extraction === "ocr");
   const unclearText = documents.some(doc => /\[unclear\]/i.test(doc.text));
-  const canScore = !incompleteEvidence && !hasRisk && !hasScan && !unclearText && guidance.status === "available" && draft.documents.every(doc => doc.relevance === "relevant") && draft.criteria.every(item => item.status !== "not_assessable");
-  const assessed = draft.criteria.filter(item => item.status !== "not_applicable");
+  const canScore = !hasIssues && !hasRisk && !hasScan && !unclearText && guidance.status === "available" && draft.documents.every(doc => doc.relevance === "relevant") && criteria.every(item => item.status !== "not_assessable");
+  const assessed = criteria.filter(item => item.status !== "not_applicable");
   const denominator = assessed.reduce((sum, item) => sum + CRITERIA[item.key].weight, 0);
   const score = canScore && denominator ? Math.round(100 * assessed.reduce((sum, item) => sum + CRITERIA[item.key].weight * (item.status === "supported" ? 1 : item.status === "partial" ? 0.5 : 0), 0) / denominator) : null;
   const unresolved = draft.missingEvidence.length > 0 || draft.questions.length > 0 || draft.criteria.some(item => ["partial", "missing"].includes(item.status));
-  const statusLabel = incompleteEvidence ? "Partial review — some items need verification" : hasRisk ? "Resolve the identified risks" : score === null ? "Limited review — more evidence needed" : unresolved ? "Needs attention" : "Ready for human review";
+  const statusLabel = reviewStatus === "broader_review_required" ? "Partial review — broader human review required"
+    : reviewStatus === "evidence_partial" ? "Partial review — evidence needs verification"
+      : hasRisk ? `Resolve the identified risks${wordingOnly ? " — writing review is partial" : ""}`
+        : wordingOnly ? "Partial writing review — wording needs review" : score === null ? "Limited review — more evidence needed" : unresolved ? "Needs attention" : "Ready for human review";
   const limitations = [...safeDraft.limitations, "Only the supplied text was reviewed. Document authenticity, unseen evidence and booking validity were not verified.", "Official sources cover general guidance; nationality, residence, exact visa subtype and local consulate instructions can change requirements."];
   if (draft.proofreading.some(item => item.requiresLegalReview) || draft.suggestedAdditions.some(item => item.requiresLegalReview)) limitations.push("Proposed changes to legal documents are drafts for the parties and a qualified legal reviewer. They do not establish legal validity, title, execution or mandatory clauses.");
   if (draft.suggestedAdditions.length) limitations.push("Suggested additions are new proposed wording, not evidence of existing clauses or verified facts. Confirm placeholders and factual statements before use.");
@@ -392,5 +443,5 @@ export function finalizeReview(draft: ReviewDraft, guidance: Guidance, documents
   const readingNotes = documents.flatMap(doc => (doc.ocrNotes ?? []).map(note => `${doc.name}: ${note}`));
   limitations.push(...readingNotes.slice(0, 8));
   if (readingNotes.length > 8) limitations.push("Additional document reading notes remain. Ask for clearer copies before relying on unclear handwritten details.");
-  return { ...safeDraft, limitations, score, statusLabel, guidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt })) }, reviewedAt: new Date().toISOString(), disclaimer: "This is a document-readiness review, not an approval probability, legal advice or a consular decision. A qualified reviewer should check the complete application before submission." };
+  return { ...safeDraft, verificationIssues, reviewStatus, limitations, score, statusLabel, guidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt })) }, reviewedAt: new Date().toISOString(), disclaimer: "This is a document-readiness review, not an approval probability, legal advice or a consular decision. A qualified reviewer should check the complete application before submission." };
 }

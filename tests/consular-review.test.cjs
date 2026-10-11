@@ -30,17 +30,21 @@ function load(relative) {
 
   const original = mod.require.bind(mod);
 
-  mod.require = name => name.startsWith('@/') ? load(`src/${name.slice(2)}.ts`) : original(name);
+  mod.require = name => {
+    if (!name.startsWith('@/')) return original(name);
+    const relative = `src/${name.slice(2)}`;
+    return load(`${relative}${fs.existsSync(path.join(root, `${relative}.ts`)) ? '.ts' : '.tsx'}`);
+  };
 
   cache.set(filename, mod);
 
-  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
+  mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
 
   return mod.exports;
 
 }
 
-const { validateReview, auditDraftWithPresentation, finalizeReview, CRITERIA, MAX_ASSESSMENT_CHARS, LEGAL_CORRECTION_NOTICE, LEGAL_ADDITION_NOTICE, officialExcerpts, documentPassages, proofreadingPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
+const { validateReview, auditDraftWithPresentation, finalizeReview, verificationIssueMessage, CRITERIA, MAX_ASSESSMENT_CHARS, LEGAL_CORRECTION_NOTICE, LEGAL_ADDITION_NOTICE, officialExcerpts, documentPassages, proofreadingPassages, reviewSchema, proofreadingPreservesFacts } = load('src/lib/consularReview.ts');
 
 const { createSourceMatcher, recoverPassage } = load('src/lib/consularSource.ts');
 
@@ -1567,10 +1571,11 @@ test('independent audit isolates material concerns and retains unrelated checked
     if (url.startsWith('https://www.gov.uk/')) throw new Error('Guidance unavailable');
     const body = JSON.parse(options.body); calls.push(body);
     if (body.output_config.format.schema.properties.issues) {
-      return providerResponse({ issues: [{ section: 'findings', index: 0, reason: 'Unsupported financial inference.' }] });
+      return providerResponse({ issues: [{ section: 'findings', index: 0, reason: 'Unsupported financial inference. PRIVATE_AUDIT_DETAIL person@example.invalid has an unverified debt.' }] });
     }
     const draft = fixture(); draft.findings[0].policyEvidence = [];
     draft.findings.push({ ...structuredClone(draft.findings[0]), title: 'Independently supported observation' });
+    draft.findings[0].title = 'PRIVATE_WITHHELD_TITLE person@example.invalid';
     return providerResponse(draft);
   };
   try {
@@ -1582,7 +1587,13 @@ test('independent audit isolates material concerns and retains unrelated checked
     assert.equal(body.report.proofreading.length, 1);
     assert.equal(body.report.verificationIssues[0].item, 'finding');
     assert.equal(body.report.verificationIssues[0].code, 'audit_unverified');
-    assert.equal(body.report.verificationIssues[0].reason, 'Unsupported financial inference.');
+    assert.equal(body.report.verificationIssues[0].reason, verificationIssueMessage('audit_unverified'));
+    assert.equal(body.report.verificationIssues[0].label, undefined);
+    assert.equal(body.report.verificationIssues[0].impact, 'evidence');
+    assert.equal(body.report.reviewStatus, 'evidence_partial');
+    assert.ok(!JSON.stringify(body).includes('PRIVATE_AUDIT_DETAIL'));
+    assert.ok(!JSON.stringify(body).includes('PRIVATE_WITHHELD_TITLE'));
+    assert.ok(!JSON.stringify(body).includes('person@example.invalid'));
     assert.equal(body.report.score, null);
     assert.match(body.report.statusLabel, /Partial review/);
     assert.equal(calls.length, 2);
@@ -1628,6 +1639,7 @@ test('section-wide and omitted-risk audit concerns never disappear or produce re
     assert.ok(parsed.verificationIssues.some(item => item.code === 'audit_unverified'));
     const report = finalizeReview(parsed, guidance, docs);
     assert.equal(report.score, null);
+    assert.equal(report.reviewStatus, 'broader_review_required');
     assert.match(report.statusLabel, /Partial review/);
     assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
     assert.equal(report.proofreading.length, 1);
@@ -1644,6 +1656,116 @@ test('an audit concern about one proposed rewrite or addition leaves other wordi
   assert.equal(parsed.suggestedAdditions.length, 0);
   assert.deepEqual(parsed.verificationIssues.map(item => item.item), ['correction', 'addition']);
   assert.equal(finalizeReview(parsed, guidance, docs).criteria.find(item => item.key === 'writing').status, 'not_assessable');
+});
+
+test('suggested additions inherit classification concerns without removing additions to other documents', () => {
+  const extra = { id: 'document-3', name: 'Supporting statement.txt', text: 'Additional context about the applicant\'s stated plans.' };
+  const documents = [...docs, extra];
+  const draft = fixture();
+  draft.documents.push({ id: extra.id, kind: 'Supporting statement', relevance: 'relevant', explanation: 'Supplied context.' });
+  const addition = { title: 'Possible added context', proposedText: '[Confirm the purpose of this statement and provide any supporting details]', rationale: 'Ask for confirmed details.', insertionPoint: 'Before the first paragraph, if appropriate.' };
+  draft.suggestedAdditions = [{ ...addition, documentId: docs[0].id }, { ...addition, documentId: extra.id }];
+  const parsed = validateReview(draft, documents, guidance, {
+    recoverItems: true,
+    auditIssues: [
+      { section: 'documents', index: 0, reason: 'PRIVATE_CLASSIFICATION_DETAIL' },
+      { section: 'suggestedAdditions', index: 0, reason: 'PRIVATE_WORDING_DETAIL' },
+    ],
+  });
+  assert.deepEqual(parsed.suggestedAdditions.map(item => item.documentId), [extra.id]);
+  const withheld = parsed.verificationIssues.find(item => item.item === 'addition');
+  assert.equal(withheld.index, 0);
+  assert.equal(withheld.documentId, docs[0].id);
+  assert.equal(withheld.impact, 'evidence', 'A document dependency must not be downgraded to a wording-only issue.');
+  const report = finalizeReview(parsed, guidance, documents);
+  assert.equal(report.reviewStatus, 'evidence_partial');
+  assert.equal(report.score, null);
+  assert.ok(!JSON.stringify(report).includes('PRIVATE_'));
+});
+
+test('wording-only failures qualify writing while retaining the other evidence assessments', () => {
+  for (const failure of ['source', 'audit', 'unsafe_correction', 'unsafe_addition']) {
+    const draft = fixture();
+    draft.criteria.forEach(item => {
+      item.status = 'supported';
+      if (!item.evidence.length) item.evidence = [{ documentId: docs[0].id, quote: 'I plans to visit London' }];
+    });
+    assert.equal(finalizeReview(validateReview(draft, docs, guidance), guidance, docs).score, 100);
+    const options = { recoverItems: true };
+    if (failure === 'source') draft.proofreading[0].original = 'Invented original wording';
+    if (failure === 'audit') options.auditIssues = [{ section: 'proofreading', index: 0, reason: 'PRIVATE_WORDING_CONCERN' }];
+    if (failure === 'unsafe_correction') {
+      draft.proofreading[0].original = docs[0].text;
+      draft.proofreading[0].suggested = docs[0].text.replace('I plans', 'I plan').replace('2000', '9000');
+    }
+    if (failure === 'unsafe_addition') draft.suggestedAdditions = [{ documentId: docs[0].id, title: 'PRIVATE_ADDITION_TITLE', proposedText: 'Accommodation has been arranged at [hotel name].', rationale: 'Provide context.', insertionPoint: 'At the end.' }];
+    const parsed = validateReview(draft, docs, guidance, options);
+    const report = finalizeReview(parsed, guidance, docs);
+    assert.equal(report.reviewStatus, 'wording_partial', failure);
+    assert.match(report.statusLabel, /Partial writing review/);
+    assert.equal(report.score, null, 'An incomplete writing assessment must not contribute a fabricated score.');
+    assert.equal(report.criteria.find(item => item.key === 'writing').status, 'not_assessable');
+    assert.deepEqual(report.criteria.filter(item => item.key !== 'writing'), draft.criteria.filter(item => item.key !== 'writing'));
+    assert.deepEqual(report.findings, parsed.findings);
+    assert.ok(report.verificationIssues.every(item => item.impact === 'wording'));
+    assert.ok(!report.summary.includes('Overall conclusions and readiness are withheld'));
+    assert.ok(!JSON.stringify(report).includes('PRIVATE_'));
+  }
+});
+
+test('section-wide wording concerns require broader review for populated and empty sections', () => {
+  for (const section of ['proofreading', 'suggestedAdditions']) {
+    for (const empty of [false, true]) {
+      const draft = fixture();
+      if (section === 'suggestedAdditions') draft.suggestedAdditions = [{ documentId: docs[0].id, title: 'Possible context', proposedText: '[Confirm the purpose of this statement]', rationale: 'Ask for confirmed details.', insertionPoint: 'At the beginning.' }];
+      if (empty) draft[section] = [];
+      const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section, index: -1, reason: 'PRIVATE_SECTION_WIDE_DETAIL' }] });
+      const report = finalizeReview(parsed, guidance, docs);
+      assert.equal(report.reviewStatus, 'broader_review_required');
+      assert.match(report.statusLabel, /broader human review required/);
+      assert.equal(report.score, null);
+      assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
+      assert.ok(report.verificationIssues.some(item => item.impact === 'broader_review'));
+      assert.ok(!JSON.stringify(report).includes('PRIVATE_SECTION_WIDE_DETAIL'));
+    }
+  }
+});
+
+test('a retained material risk stays prominent when the writing review is partial', () => {
+  const draft = fixture(); draft.findings[0].type = 'risk';
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section: 'proofreading', index: 0, reason: 'Check the proposed wording.' }] });
+  const report = finalizeReview(parsed, guidance, docs);
+  assert.equal(report.reviewStatus, 'wording_partial');
+  assert.equal(report.findings[0].type, 'risk');
+  assert.match(report.statusLabel, /^Resolve the identified risks/);
+  assert.match(report.statusLabel, /writing review is partial/);
+  assert.equal(report.score, null);
+});
+
+test('report rendering uses fixed explanations even when an older result contains private audit text', () => {
+  const { createElement } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { AssessmentReport } = load('src/components/consular/AssessmentReport.tsx');
+  for (const audit of [
+    { section: 'proofreading', index: 0 },
+    { section: 'findings', index: 0 },
+    { section: 'proofreading', index: -1 },
+  ]) {
+    const privateReason = 'PRIVATE_AUDIT_RENDER person@example.invalid has unverified debt.';
+    const parsed = validateReview(fixture(), docs, guidance, { recoverItems: true, auditIssues: [{ ...audit, reason: privateReason }] });
+    assert.ok(parsed.verificationIssues.some(item => item.reason === privateReason), 'Detailed reasons remain in the internal draft only.');
+    const report = finalizeReview(parsed, guidance, docs);
+    const legacy = structuredClone(report);
+    legacy.verificationIssues.forEach(item => { item.reason = privateReason; item.label = 'PRIVATE_RENDER_LABEL'; });
+    const html = renderToStaticMarkup(createElement(AssessmentReport, { report: legacy, country: 'United Kingdom', visaClass: 'Visit / Tourist Visa', documentNames: Object.fromEntries(docs.map(doc => [doc.id, doc.name])) }));
+    assert.ok(!html.includes('PRIVATE_AUDIT_RENDER'));
+    assert.ok(!html.includes('PRIVATE_RENDER_LABEL'));
+    assert.ok(!html.includes('person@example.invalid'));
+    assert.ok(html.includes(verificationIssueMessage('audit_unverified')));
+    if (report.reviewStatus === 'wording_partial') assert.ok(html.includes('A readiness score awaits completion of the writing review.'));
+    if (report.reviewStatus === 'evidence_partial') assert.ok(html.includes('Overall conclusions and readiness are withheld'));
+    if (report.reviewStatus === 'broader_review_required') assert.ok(html.includes('Broader human review is required before relying on the report.'));
+  }
 });
 
 test('malformed compact audits never become approved reports', async () => {
