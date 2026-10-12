@@ -4,7 +4,7 @@ import Link from "next/link";
 const footerLinks = [
   ["Visa Services", "/services?service=visa-assistance#visa-assistance"],
   ["Flights & Hotels", "/services?service=flights#flights"],
-  ["Blog", "/blog"],
+  ["Blog", null],
   ["About Us", "/about"],
 ] as const;
 
@@ -36,9 +36,18 @@ export function SiteFooter() {
           <ul className="space-y-2 text-sm text-white/80">
             {footerLinks.map(([label, href]) => (
               <li key={label}>
-                <Link href={href} className="hover:text-white">
-                  {label}
-                </Link>
+                {href ? (
+                  <Link href={href} className="hover:text-white">
+                    {label}
+                  </Link>
+                ) : (
+                  <span tabIndex={0} aria-disabled="true" aria-describedby={`${label}-soon`} className="group relative cursor-default outline-none">
+                    {label}
+                    <span id={`${label}-soon`} role="tooltip" className="pointer-events-none absolute left-full top-1/2 ml-3 -translate-y-1/2 whitespace-nowrap rounded-md bg-[#e8aa4e] px-2.5 py-1 text-xs font-semibold text-[#042c43] opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                      Coming soon
+                    </span>
+                  </span>
+                )}
               </li>
             ))}
           </ul>

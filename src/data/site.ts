@@ -246,16 +246,6 @@ export const routePages = {
     bullets: ["Document review", "Statement guidance", "Sponsor support", "Application readiness"],
     cta: "Review my POF",
   },
-  blog: {
-    eyebrow: "Travel Notes",
-    title: "Guides, updates and practical travel insight.",
-    description:
-      "Read helpful notes on visa planning, study-abroad preparation, funding, destinations and smarter booking choices.",
-    icon: "Book",
-    image: "/assets/hero-travel.jpg",
-    bullets: ["Visa tips", "Study guides", "Travel planning", "Funding notes"],
-    cta: "Read articles",
-  },
   payment: {
     eyebrow: "Payments",
     title: "Make secure payments for your travel services.",
@@ -388,19 +378,6 @@ export const routePageDetails = {
     noteTitle: "Your money evidence must make sense.",
     note:
       "Proof of funds is more than a balance. We check whether the documents tell a believable, consistent financial story.",
-  },
-  blog: {
-    badge: "Practical guides for visa, travel, funding and relocation decisions.",
-    cards: [
-      ["Visa planning notes", "Checklists, timelines and common mistakes for visit, study and work visa applicants.", "File"],
-      ["POF explainers", "How proof of funds, sponsors and bank statements are assessed in real applications.", "Money"],
-      ["Study abroad guides", "School search, scholarships, course choice and student visa preparation.", "Cap"],
-      ["Travel alerts", "Flight, hotel, insurance and destination planning updates for modern travelers.", "Plane"],
-    ],
-    steps: ["Read a guide", "Save your checklist", "Ask a question", "Book support when ready"],
-    noteTitle: "Good information prevents expensive mistakes.",
-    note:
-      "The blog is built to answer the questions clients ask before they spend money on submissions, bookings or school deposits.",
   },
   payment: {
     badge: "Secure service payments, payment plans and invoice confirmation.",
