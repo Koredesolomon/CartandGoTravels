@@ -4,7 +4,7 @@ import { CHECKOUT_COOKIE, newCheckoutRef, paymentConfig, PaymentConfigurationErr
 import { isConsularPaymentRequired } from "@/lib/consularAccess";
 
 export async function POST(request: NextRequest) {
-  if (!isConsularPaymentRequired()) return NextResponse.json({ code: "PAYMENT_DISABLED", error: "Payment is currently disabled. Refresh the AI Consular page to use the tools." }, { status: 409 });
+  if (!isConsularPaymentRequired()) return NextResponse.json({ code: "PAYMENT_DISABLED", error: "Payment is currently disabled. Refresh the Consular page to use the tools." }, { status: 409 });
   const body = await request.json().catch(() => null);
   const email = typeof body?.email === "string" ? body.email.trim() : "";
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     stage = "flutterwave_request";
     const upstream = await fetch("https://api.flutterwave.com/v3/payments", {
       method: "POST", headers: { Authorization: `Bearer ${config.key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ tx_ref: ref, amount: config.amount, currency: config.currency, redirect_url: new URL("/ai-consular-check/payment-callback", config.appUrl).href, customer: { email }, customizations: { title: "CartandGo AI Consular Check" } }),
+      body: JSON.stringify({ tx_ref: ref, amount: config.amount, currency: config.currency, redirect_url: new URL("/ai-consular-check/payment-callback", config.appUrl).href, customer: { email }, customizations: { title: "CartandGo Consular Check" } }),
       signal: AbortSignal.timeout(15000),
     });
     upstreamStatus = upstream.status;

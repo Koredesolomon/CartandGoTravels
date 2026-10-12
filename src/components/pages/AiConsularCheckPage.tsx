@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
@@ -18,6 +17,11 @@ import { CvPdfPreview } from "@/components/consular/CvPdfPreview";
 import type { CvTemplateId } from "@/lib/cvTemplates";
 import { CvScratchBuilder } from "@/components/consular/CvScratchBuilder";
 import { cvCountryProfile, emptyCvBuilder, type CvBuilderData, type CvDraft } from "@/lib/cvBuilder";
+import { CoverLetterBuilder } from "@/components/consular/CoverLetterBuilder";
+import { coverLetterKinds, emptyCoverLetter, reviewCoverLetter, type CoverLetterData, type CoverLetterDraft, type CoverLetterKind } from "@/lib/coverLetter";
+import { appointmentCentres, interviewSets, type AppointmentType, type InterviewCategory, type InterviewQuestion } from "@/data/interviewQuestions";
+import { analyzeDocument, type Flag } from "@/lib/localRewriteAnalysis";
+import { EmptyReport, EntryToggle, FlagCard, Panel, ReportSection, Score, ScratchInput, SelectField, inputClass, type EntryMode } from "@/components/consular/ConsularFormControls";
 
 const visaClasses = [
   "Study Permit",
@@ -36,275 +40,6 @@ const toolTabs = [
 ] as const;
 
 type ActiveTool = (typeof toolTabs)[number][0];
-type EntryMode = "upload" | "paste" | "scratch";
-type InterviewQuestion = readonly [string, string];
-
-const appointmentCentres = {
-  "Biometrics Enrolment": ["Lagos(VFS Global)", "Abuja(VFS global)", "BLS", "TLS"],
-  "Medical Examination": ["Lagos(QLife)", "Abuja(QLife)", "IOM(Lagos)", "IOM(Abuja)", "IOM(Benin)", "St Nicholas Hospital"],
-} as const;
-type AppointmentType = keyof typeof appointmentCentres;
-
-const interviewSets = {
-  Study: {
-    "Canada Study Permit": [
-      ["Why did you choose to study in Canada specifically, and why now?", "Destination & Intent"],
-      ["Walk me through the source of the funds shown in your bank statement.", "Funding Legitimacy"],
-      ["What ties do you have to Nigeria that would bring you back after your studies?", "Home Country Ties"],
-      ["What do you know about your specific programme, and how does it fit your career plan?", "Programme Knowledge"],
-      ["Why this school and not a more affordable one closer to home?", "Destination & Intent"],
-      ["Have you ever been refused a visa to Canada or any other country before?", "Prior Immigration History"],
-      ["If your study permit is refused, what will you do?", "Contingency Planning"],
-    ],
-    "UK Student Visa": [
-      ["Why did you choose this UK institution over others offering a similar course?", "Programme Knowledge"],
-      ["How will you meet the maintenance funds requirement for the full length of your course?", "Funding Legitimacy"],
-      ["What are your plans immediately after completing this course?", "Contingency Planning"],
-      ["What ties, family, property or career, do you have in Nigeria?", "Home Country Ties"],
-      ["Have you passed the English language requirement for this course?", "Programme Knowledge"],
-    ],
-    "Germany National D-Visa (Study)": [
-      ["Why did you choose Germany over other study destinations?", "Destination & Intent"],
-      ["How did you fund your blocked account, and where did that money originally come from?", "Funding Legitimacy"],
-      ["What connects you to Nigeria that would bring you back after your studies or job-search period?", "Home Country Ties"],
-      ["What do you know about the university and programme you have been admitted to?", "Programme Knowledge"],
-      ["What will you do if your visa application is delayed or refused?", "Contingency Planning"],
-    ],
-    "USA F-1 Student Visa": [
-      ["What school issued your I-20, and why did you choose that specific programme?", "Programme Knowledge"],
-      ["Who is sponsoring your studies, and how do their finances support the full cost?", "Funding Legitimacy"],
-      ["What ties will bring you back to Nigeria after this programme?", "Home Country Ties"],
-      ["Why not study this same course in Nigeria or a cheaper destination?", "Destination & Intent"],
-      ["US law presumes immigrant intent unless you prove otherwise. How do you prove otherwise?", "Contingency Planning"],
-    ],
-  },
-  Work: {
-    "UK Skilled Worker": [
-      ["Why did this employer choose to sponsor you specifically for this role?", "Destination & Intent"],
-      ["Can you describe your day-to-day responsibilities in the sponsored role?", "Programme Knowledge"],
-      ["What ties do you currently have to Nigeria?", "Home Country Ties"],
-      ["What is the salary being offered, and does it meet the going rate?", "Funding Legitimacy"],
-      ["What is your plan if your Certificate of Sponsorship is withdrawn before you travel?", "Contingency Planning"],
-    ],
-    "Canada Work Permit": [
-      ["What does your LMIA or exemption cover, and why were you selected for this role?", "Programme Knowledge"],
-      ["How does your work experience in Nigeria qualify you for this position?", "Programme Knowledge"],
-      ["What ties to Nigeria remain while you work abroad?", "Home Country Ties"],
-      ["Who is your employer, and how did the job offer come about?", "Destination & Intent"],
-      ["What will you do at the end of your work permit validity?", "Contingency Planning"],
-    ],
-    "UAE / Gulf Employment Visa": [
-      ["How did you secure this job offer, and have you verified the employer directly?", "Destination & Intent"],
-      ["What is your monthly salary, and how does it compare to the cost of living there?", "Funding Legitimacy"],
-      ["What family or financial obligations do you have back home?", "Home Country Ties"],
-      ["Do you have a copy of your employment contract, and do the terms match what was promised?", "Programme Knowledge"],
-    ],
-  },
-  Visit: {
-    "Schengen Tourist Visa": [
-      ["What is the specific purpose of this trip, and why this itinerary?", "Destination & Intent"],
-      ["Who is funding this trip, and can it be traced to a legitimate income source?", "Funding Legitimacy"],
-      ["What obligations are waiting for you back in Nigeria?", "Home Country Ties"],
-      ["Can you walk me through your day-by-day itinerary?", "Programme Knowledge"],
-      ["Why should I believe you will leave the Schengen area before your visa expires?", "Contingency Planning"],
-    ],
-    "UK Visit Visa": [
-      ["What is the main purpose of this visit, and where will you stay?", "Destination & Intent"],
-      ["How is this trip funded, and can you show a clear paper trail?", "Funding Legitimacy"],
-      ["What is pulling you back to Nigeria at the end of the trip?", "Home Country Ties"],
-      ["Do you have return or onward flight booking already?", "Programme Knowledge"],
-    ],
-    "US B1/B2 Visitor Visa": [
-      ["What is the purpose of your trip to the United States?", "Destination & Intent"],
-      ["Who is paying for this trip, and what do you do for a living?", "Funding Legitimacy"],
-      ["What do you own or owe in Nigeria that requires you to return?", "Home Country Ties"],
-      ["How long do you intend to stay, and can you show your travel plans?", "Programme Knowledge"],
-    ],
-  },
-} as const;
-
-type InterviewCategory = keyof typeof interviewSets;
-
-type Flag = {
-  type: "risk" | "weak" | "excellent";
-  title: string;
-  body: string;
-};
-
-type LocalRewriteAnalysis = {
-  score: number;
-  status: {
-    label: string;
-    className: string;
-  };
-  completeness: number;
-  clarity: number;
-  ties: number;
-  flags: Flag[];
-  roadmap: string[];
-  showPaySmallSmall: boolean;
-  summary?: string;
-  disclaimer?: string;
-  source?: "ai" | "local";
-};
-
-const inputClass =
-  "mt-1.5 w-full rounded-md border border-[#d7dfe5] bg-[#fbf8f2] px-3 py-2.5 text-[14.5px] text-[#1b1f27] outline-none transition focus:border-[#0098ba] focus:ring-2 focus:ring-[#0098ba]/20";
-
-function countHits(text: string, keywords: readonly string[]) {
-  return keywords.filter((keyword) => text.includes(keyword)).length;
-}
-
-function analyzeDocument(text: string): LocalRewriteAnalysis & { fundsHits: number } {
-  const lower = text.toLowerCase();
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const wordCount = words.length;
-
-  const fundsHits = countHits(lower, [
-    "bank statement",
-    "savings",
-    "sponsor",
-    "salary",
-    "income",
-    "gic",
-    "account balance",
-    "payslip",
-    "business income",
-  ]);
-  const intentHits = countHits(lower, [
-    "intend to return",
-    "purpose of my studies",
-    "after completing",
-    "plan to return",
-    "upon completion",
-    "career goal",
-    "return to nigeria",
-    "job offer",
-    "why i chose",
-  ]);
-  const tiesHits = countHits(lower, [
-    "family",
-    "property",
-    "business",
-    "employment",
-    "job",
-    "children",
-    "spouse",
-    "house",
-    "land",
-    "parents",
-  ]);
-  const riskHits = countHits(lower, [
-    "loan",
-    "gift",
-    "borrowed",
-    "donation",
-    "uncle will send",
-    "friend will send",
-  ]);
-
-  const completeness = Math.min(30, Math.round((fundsHits / 3) * 30));
-  const clarity = Math.min(30, (intentHits > 0 ? 20 : 8) + Math.round(wordCount / 40));
-  let ties = Math.min(32, tiesHits * 10) + (fundsHits > 0 ? 8 : 0);
-
-  if (riskHits > 0 && fundsHits === 0) {
-    ties = Math.max(0, ties - 14);
-  }
-
-  ties = Math.min(40, ties);
-
-  const score = Math.max(0, Math.min(100, completeness + clarity + ties));
-  const flags: Flag[] = [];
-
-  if (wordCount < 60) {
-    flags.push({
-      type: "weak",
-      title: "Insufficient proof",
-      body: "This document is too brief for a consular officer to assess intent or home-country ties. Expand it with specific, verifiable detail.",
-    });
-  }
-
-  if (intentHits === 0) {
-    flags.push({
-      type: "weak",
-      title: "Weak intent",
-      body: "No clear statement explains why this route was chosen or what happens afterward. Officers look for a specific, logical narrative.",
-    });
-  }
-
-  if (riskHits > 0 && fundsHits === 0) {
-    flags.push({
-      type: "risk",
-      title: "Funding risk",
-      body: "Informal third-party funding with no source-of-funds explanation can look like an unexplained lump-sum deposit pattern.",
-    });
-  }
-
-  if (tiesHits === 0) {
-    flags.push({
-      type: "weak",
-      title: "Weak home-country ties",
-      body: "No family, property, employment or business ties were found. This is one of the most common refusal drivers.",
-    });
-  }
-
-  if (flags.length === 0) {
-    flags.push({
-      type: "excellent",
-      title: "Strong structure",
-      body: "The document reads as specific, complete and connected to home-country ties. No structural red flags were detected.",
-    });
-  }
-
-  const roadmap = [];
-
-  if (completeness < 20) {
-    roadmap.push("Attach traceable financial evidence, including statement history and an explanation for large deposits.");
-  }
-  if (clarity < 20) {
-    roadmap.push("Rewrite the purpose section to name the programme, employer or itinerary and explain why it is the logical next step.");
-  }
-  if (ties < 20) {
-    roadmap.push("Add concrete ties such as employment letters, business registration, family responsibilities or property documents.");
-  }
-  if (riskHits > 0 && fundsHits === 0) {
-    roadmap.push("Replace informal funding language with a sponsor affidavit and the sponsor's own income evidence.");
-  }
-
-  roadmap.push("Have a CartandGo visa officer verify the finished file before submission or embassy payment.");
-
-  return {
-    score,
-    status:
-      score >= 80
-        ? { label: "Excellent to apply", className: "bg-[#dff4e9] text-[#1e7a4c]" }
-        : score >= 50
-          ? { label: "Good profile", className: "bg-[#fdf2da] text-[#93670f]" }
-          : { label: "Critical gaps", className: "bg-[#fbe4e1] text-[#b5473b]" },
-    completeness,
-    clarity,
-    ties,
-    flags,
-    roadmap,
-    showPaySmallSmall: completeness < 20 || fundsHits === 0,
-    summary: "This local fallback found basic readiness issues using keyword checks. Configure the AI backend for a deeper review.",
-    disclaimer: "This fallback check is informational and is not legal advice, immigration advice, or a visa decision.",
-    source: "local",
-    fundsHits,
-  };
-}
-
-function flagClass(type: Flag["type"]) {
-  if (type === "excellent") {
-    return "border-[#0098ba] bg-[#e8f6fb]";
-  }
-
-  if (type === "weak") {
-    return "border-[#f0a42f] bg-[#fff7e8]";
-  }
-
-  return "border-[#f00000] bg-[#fff0f0]";
-}
 
 export function AiConsularCheckPage({
   paymentRequired = false,
@@ -359,8 +94,9 @@ export function AiConsularCheckPage({
   const [coverMode, setCoverMode] = useState<EntryMode>("upload");
   const [coverText, setCoverText] = useState("");
   const [coverFileName, setCoverFileName] = useState("");
-  const [coverScratch, setCoverScratch] = useState({ name: "", target: "", strengths: "" });
-  const [coverResult, setCoverResult] = useState("");
+  const [coverCountry, setCoverCountry] = useState("Canada");
+  const [coverScratch, setCoverScratch] = useState<CoverLetterData>(emptyCoverLetter);
+  const [coverResult, setCoverResult] = useState<{ checks: Flag[]; draft?: CoverLetterDraft } | null>(null);
   const [appointment, setAppointment] = useState<{ type: AppointmentType; city: string; date: string; slot: string }>({
     type: "Biometrics Enrolment",
     city: appointmentCentres["Biometrics Enrolment"][0],
@@ -520,7 +256,7 @@ export function AiConsularCheckPage({
     setUploadError("");
     setIsReadingFile(true);
     if (target === "cv") { setCvText(""); setCvFileName(""); setCvResult(null); }
-    else { setCoverText(""); setCoverFileName(""); setCoverResult(""); }
+    else { setCoverText(""); setCoverFileName(""); setCoverResult(null); }
     try {
       const text = await extractDocumentText(file);
       if (version !== uploadVersion.current) return;
@@ -547,7 +283,7 @@ export function AiConsularCheckPage({
     uploadVersion.current++;
     setIsReadingFile(false);
     setUploadError("");
-    setCoverResult("");
+    setCoverResult(null);
     setCoverMode(mode);
   }
 
@@ -635,27 +371,12 @@ export function AiConsularCheckPage({
     setCvResult({ changes });
   }
 
-  function runCoverLetter() {
-    if (coverMode === "scratch") {
-      if (!coverScratch.name.trim() || !coverScratch.target.trim()) {
-        setCoverResult("");
-        return;
-      }
-
-      setCoverResult(
-        `Dear Admissions/Hiring Committee,\n\nI am writing to express my strong interest in ${coverScratch.target}. My name is ${coverScratch.name}, and I bring ${coverScratch.strengths || "a clear record of achievement and readiness for this opportunity"}.\n\nThis opportunity aligns directly with my professional trajectory, and I have researched it carefully to confirm it is the right next step. I am confident I can contribute meaningfully and welcome the opportunity to discuss my application further.\n\nSincerely,\n${coverScratch.name}`,
-      );
-      return;
-    }
-
+  function runCoverLetterReview() {
     if (!coverText.trim()) {
-      setCoverResult("");
+      setCoverResult(null);
       return;
     }
-
-    setCoverResult(
-      `${coverText.trim()}\n\nI have researched this opportunity thoroughly and am confident it is the right next step, after which I intend to apply what I have gained toward my long-term plans.`,
-    );
+    setCoverResult({ checks: reviewCoverLetter(coverText, coverCountry, coverScratch.kind) });
   }
 
   function submitAnswer() {
@@ -685,7 +406,7 @@ export function AiConsularCheckPage({
           <div className="mx-auto max-w-7xl">
             <p className="font-bold">Payment Successful, you can close tab and return to Consular page</p>
             <Link href="/ai-consular-check#consular-tools" className="mt-2 inline-block font-semibold underline underline-offset-4">
-              Continue to AI Consular
+              Continue to Consular
             </Link>
           </div>
         </section>
@@ -698,7 +419,7 @@ export function AiConsularCheckPage({
               <Icon name="Shield" />
             </div>
             <p className="mt-8 text-xs font-black uppercase text-[#04f1f1]">
-              AI Consular+
+              Consular+
             </p>
             <h1 className="mt-4 font-serif text-[45px] leading-[1.04] md:text-[60px]">
               Your full document and travel-prep suite.
@@ -754,7 +475,7 @@ export function AiConsularCheckPage({
                 One-time unlock
               </span>
               <h2 className="mt-5 font-serif text-4xl text-[#07141a]">
-                AI Consular+ Full Suite
+                Consular+ Full Suite
               </h2>
               <p className="mt-3 font-serif text-5xl font-black text-[#f0a42f]">
                 {price}{" "}
@@ -933,6 +654,9 @@ export function AiConsularCheckPage({
                 <div className="space-y-6">
                   <Panel>
                     <EntryToggle value={cvMode} onChange={changeCvMode} modes={["upload", "scratch"]} labels={["Upload CV", "Start from Scratch"]} />
+                    <p className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#93670f]">
+                      <b>Important:</b> Everything on your CV must be true and match your visa forms, reference letters and other documents. Officers and employers may check it.
+                    </p>
                     <label className="mt-5 block max-w-md text-[12.5px] font-semibold text-[#07141a]">
                       Optimise for destination country
                       <select className={inputClass} value={cvCountry} onChange={(event) => { setCvCountry(event.target.value); setCvResult(null); }}>
@@ -946,6 +670,7 @@ export function AiConsularCheckPage({
                     <UploadCard
                       documentName="CV"
                       description="Click the button below to upload your CV or resume for a review tailored to your destination."
+                      notice={<><b>Important:</b> We review your CV but do not change it. You will need to make the suggested changes in your own CV file, or <button type="button" onClick={() => changeCvMode("scratch")} className="font-bold underline underline-offset-2">create from scratch</button>.</>}
                       fileName={cvFileName}
                       isReading={isReadingFile}
                       onFileSelect={(file) => void processFile(file, "cv")}
@@ -974,6 +699,11 @@ export function AiConsularCheckPage({
                           <FlagCard key={item} type="excellent" title={cvMode === "scratch" ? "Prepared" : "Guidance"} body={item} />
                         ))}
                       </ReportSection>
+                      {cvMode === "upload" ? (
+                        <p role="note" className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#93670f]">
+                          <b>Important:</b> Your uploaded CV has not been changed. Go back to your CV and adjust it based on this review, then upload it again to check it before you apply.
+                        </p>
+                      ) : null}
                       {cvResult.draft ? (
                         <ReportSection title="Your CV draft">
                           <CvTemplatePicker value={cvTemplate} onChange={setCvTemplate} />
@@ -988,33 +718,50 @@ export function AiConsularCheckPage({
 
               {activeTool === "cover" ? (
                 <Panel>
-                  <EntryToggle value={coverMode} onChange={changeCoverMode} modes={["upload", "scratch"]} labels={["Upload Draft", "Start from Scratch"]} />
+                  <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
+                    <SelectField label="Letter type" value={coverLetterKinds.find(([kind]) => kind === coverScratch.kind)![1]} onChange={value => { const kind = coverLetterKinds.find(([, label]) => label === value)?.[0] as CoverLetterKind; setCoverScratch(current => ({ ...current, kind })); setCoverResult(null); }} options={coverLetterKinds.map(([, label]) => label)} />
+                    <SelectField label={coverScratch.kind === "visa" ? "Destination country" : "Country you are applying to"} value={coverCountry} onChange={value => { setCoverCountry(value); setCoverResult(null); }} options={worldCountries} />
+                  </div>
+                  <div className="mt-5">
+                    <EntryToggle value={coverMode} onChange={changeCoverMode} modes={["upload", "scratch"]} labels={["Upload Draft", "Start from Scratch"]} />
+                  </div>
                   {coverMode === "upload" ? (
-                    <UploadCard
-                      documentName="cover letter"
-                      description="Click the button below to upload your draft cover letter and prepare it for your application."
-                      fileName={coverFileName}
-                      isReading={isReadingFile}
-                      onFileSelect={(file) => void processFile(file, "cover")}
-                      onRemove={() => { setCoverText(""); setCoverFileName(""); setCoverResult(""); setUploadError(""); }}
-                      className="mt-4"
-                    />
+                    <>
+                      <UploadCard
+                        documentName="cover letter"
+                        description="Click the button below to upload your draft cover letter for a check against the standard for your destination."
+                        notice={<><b>Important:</b> We review your letter but do not change it. You will need to make the suggested changes in your own file, or <button type="button" onClick={() => changeCoverMode("scratch")} className="font-bold underline underline-offset-2">create from scratch</button>.</>}
+                        fileName={coverFileName}
+                        isReading={isReadingFile}
+                        onFileSelect={(file) => void processFile(file, "cover")}
+                        onRemove={() => { setCoverText(""); setCoverFileName(""); setCoverResult(null); setUploadError(""); }}
+                        className="mt-4"
+                      />
+                      <button type="button" onClick={runCoverLetterReview} disabled={isReadingFile || !coverText.trim()} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a] disabled:cursor-not-allowed disabled:opacity-40">
+                        Review Cover Letter
+                      </button>
+                    </>
                   ) : null}
                   {coverMode === "scratch" ? (
-                    <div className="mt-4 grid gap-4">
-                      <ScratchInput label="Your name" value={coverScratch.name} onChange={(value) => { setCoverScratch((current) => ({ ...current, name: value })); setCoverResult(""); }} />
-                      <ScratchInput label="Target programme / employer" value={coverScratch.target} onChange={(value) => { setCoverScratch((current) => ({ ...current, target: value })); setCoverResult(""); }} />
-                      <ScratchInput label="Key strengths" value={coverScratch.strengths} onChange={(value) => { setCoverScratch((current) => ({ ...current, strengths: value })); setCoverResult(""); }} />
-                    </div>
+                    <CoverLetterBuilder country={coverCountry} value={coverScratch} onChange={value => { setCoverScratch(value); setCoverResult(null); }} onBuild={draft => setCoverResult({ draft, checks: draft.notes })} />
                   ) : null}
-                  <button type="button" onClick={runCoverLetter} disabled={isReadingFile} className="mt-5 rounded-md bg-[#f0a42f] px-5 py-3 text-sm font-black text-[#07141a]">
-                    Generate Cover Letter
-                  </button>
                   {coverResult ? (
-                    <ReportSection title="Your cover letter draft">
-                      <textarea aria-label="Your cover letter draft" readOnly value={coverResult} className={`${inputClass} min-h-60 resize-y leading-7`} />
-                      {coverMode === "scratch" ? <DocumentPdfDownload key={coverResult} kind="Cover Letter" name={coverScratch.name.trim()} text={coverResult} /> : null}
-                    </ReportSection>
+                    <>
+                      <ReportSection title={`${coverResult.draft ? "Letter summary" : "Cover letter review"} - ${coverCountry}`}>
+                        {coverResult.checks.map(check => <FlagCard key={`${check.title}-${check.body}`} {...check} />)}
+                      </ReportSection>
+                      {coverResult.draft ? null : (
+                        <p role="note" className="mt-5 rounded-md bg-[#fff7e8] p-4 text-sm leading-6 text-[#93670f]">
+                          <b>Important:</b> Your uploaded letter has not been changed. Go back to your letter and adjust it based on this review, then upload it again to check it before you apply.
+                        </p>
+                      )}
+                      {coverResult.draft ? (
+                        <ReportSection title="Your cover letter draft">
+                          <textarea aria-label="Your cover letter draft" readOnly value={coverResult.draft.text} className={`${inputClass} min-h-96 resize-y leading-7`} />
+                          <DocumentPdfDownload key={coverResult.draft.text} kind="Cover Letter" name={coverResult.draft.name} title={coverResult.draft.title} paperSize={coverResult.draft.paperSize} text={coverResult.draft.text} />
+                        </ReportSection>
+                      ) : null}
+                    </>
                   ) : null}
                 </Panel>
               ) : null}
@@ -1194,7 +941,7 @@ export function AiConsularCheckPage({
                   Secure payment
                 </p>
                 <h2 id="ai-payment-title" className="mt-2 font-serif text-3xl">
-                  Unlock AI Consular+
+                  Unlock Consular+
                 </h2>
               </div>
               <button
@@ -1243,127 +990,5 @@ export function AiConsularCheckPage({
         </div>
       ) : null}
     </>
-  );
-}
-
-function EmptyReport() {
-  return (
-    <div className="flex min-h-96 flex-col justify-center rounded-md bg-[#e8f6fb] p-6">
-      <Icon name="Search" className="h-10 w-10 text-[#0098ba]" />
-      <h2 className="mt-5 font-serif text-3xl text-[#07141a]">
-        Your readiness report will appear here.
-      </h2>
-      <p className="mt-3 max-w-xl leading-7 text-[#5b6870]">
-        Upload travel documents or paste their text, then run the review to see evidence-based findings, proofreading corrections and questions to resolve.
-      </p>
-    </div>
-  );
-}
-
-function Score({ score }: { score: number }) {
-  return (
-    <div className="flex h-28 w-28 flex-col items-center justify-center rounded-full border-[7px] border-[#d7dfe5]">
-      <span className="font-serif text-3xl font-black text-[#07141a]">{score}</span>
-      <span className="text-xs text-[#5b6870]">/ 100</span>
-    </div>
-  );
-}
-
-function FlagCard({ type, title, body }: Flag) {
-  return (
-    <div className={`mt-4 rounded-md border-l-4 p-4 text-sm leading-6 ${flagClass(type)}`}>
-      <b className="block text-[#07141a]">{title}</b>
-      <span className="text-[#5b6870]">{body}</span>
-    </div>
-  );
-}
-
-function ReportSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="mt-7">
-      <h3 className="mb-3 text-xs font-black uppercase text-[#f0a42f]">{title}</h3>
-      <div className="space-y-3">{children}</div>
-    </div>
-  );
-}
-
-function Panel({ children }: { children: ReactNode }) {
-  return <div className="rounded-lg border border-[#d7dfe5] bg-white p-6">{children}</div>;
-}
-
-function ScratchInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="mb-3 block text-[12.5px] font-semibold text-[#07141a]">
-      {label}
-      <input value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />
-    </label>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: readonly string[];
-}) {
-  return (
-    <label className="block text-[12.5px] font-semibold text-[#07141a]">
-      {label}
-      <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((item) => (
-          <option key={item}>{item}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function EntryToggle({
-  value,
-  onChange,
-  labels,
-  modes = ["upload", "paste", "scratch"],
-}: {
-  value: EntryMode;
-  onChange: (mode: EntryMode) => void;
-  labels: readonly string[];
-  modes?: readonly EntryMode[];
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {modes.map((mode, index) => (
-        <button
-          key={mode}
-          type="button"
-          onClick={() => onChange(mode)}
-          className={`rounded-md border px-4 py-2 text-sm font-bold ${
-            value === mode
-              ? "border-[#07141a] bg-[#07141a] text-white"
-              : "border-[#d7dfe5] bg-[#fbf8f2] text-[#1b1f27]"
-          }`}
-        >
-          {labels[index]}
-        </button>
-      ))}
-    </div>
   );
 }

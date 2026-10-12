@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { Icon } from "@/components/ui/Icon";
 
 type UploadCardProps = {
@@ -16,6 +16,7 @@ type UploadCardProps = {
   className?: string;
   multiple?: boolean;
   onFilesSelect?: (files: File[]) => void;
+  notice?: ReactNode;
 };
 
 export function UploadCard({
@@ -31,6 +32,7 @@ export function UploadCard({
   className = "",
   multiple = false,
   onFilesSelect,
+  notice,
 }: UploadCardProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -47,6 +49,11 @@ export function UploadCard({
       <p className="mx-auto max-w-2xl text-base leading-7 text-[#5b6870] sm:text-lg sm:leading-8">
         {description}
       </p>
+      {notice ? (
+        <p className="mx-auto mt-4 max-w-2xl rounded-lg bg-[#fff7e8] px-4 py-3 text-left text-sm leading-6 text-[#93670f]">
+          {notice}
+        </p>
+      ) : null}
       <input
         ref={fileInput}
         type="file"

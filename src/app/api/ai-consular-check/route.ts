@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { enqueueConsularJob } from "@/lib/consularJobs";
 import { isLegalDocument } from "@/lib/consularSource";
-import { requestConsularProvider, consularProviderFailureReason } from "@/lib/consularProvider";
+import { requestConsularProvider, consularProviderFailureReason, consularModelRequest } from "@/lib/consularProvider";
 export const maxDuration = 600;
 const REVIEW_PASS_TIMEOUT_MS = 240_000;
 const REVIEW_TOTAL_TIMEOUT_MS = 550_000;
@@ -100,12 +100,13 @@ class AIReportError extends Error {
   constructor(public reason: "max_tokens" | "refusal" | "unexpected_stop" | "invalid_output" | "invalid_json") { super(`AI report failed: ${reason}.`); }
 }
 async function review(apiKey: string, content: string, signal: AbortSignal, schema: object, retryBudget: { remaining: number }, maxTokens = 7000, systemPrompt = `${REVIEW_PROMPT}\n${REVIEW_LIMITS_PROMPT}\n${DOCUMENT_EVIDENCE_PROMPT}`): Promise<unknown> {
+  const provider = consularModelRequest();
   const response = await requestConsularProvider({
     signal: AbortSignal.any([signal, AbortSignal.timeout(REVIEW_PASS_TIMEOUT_MS)]),
     method: "POST",
-    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+    headers: { ...provider.headers, "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+      ...provider.body,
       max_tokens: maxTokens,
       system: systemPrompt,
       output_config: { format: { type: "json_schema", schema } },

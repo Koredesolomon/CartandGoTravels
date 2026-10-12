@@ -4,7 +4,7 @@ import { getConsularRequestAccess, withConsularSession } from "@/lib/consularAcc
 import { MAX_FILE_BYTES } from "@/lib/documentText";
 import { OCR_PROMPT, OCR_SCHEMA, validateOcrResult } from "@/lib/documentOcr";
 import { enqueueConsularJob } from "@/lib/consularJobs";
-import { requestConsularProvider, consularProviderFailureReason } from "@/lib/consularProvider";
+import { requestConsularProvider, consularProviderFailureReason, consularModelRequest } from "@/lib/consularProvider";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -60,11 +60,12 @@ export async function POST(request: NextRequest) {
 
 async function transcribe(input: Awaited<ReturnType<typeof readPdf>>, apiKey: string, signal: AbortSignal) {
   try {
+    const provider = consularModelRequest();
     const response = await requestConsularProvider({
       method: "POST", signal: AbortSignal.any([signal, AbortSignal.timeout(260_000)]),
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      headers: { ...provider.headers, "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6", max_tokens: 24000,
+        ...provider.body, max_tokens: 24000,
         system: OCR_PROMPT, output_config: { format: { type: "json_schema", schema: OCR_SCHEMA } },
         messages: [{ role: "user", content: [
           { type: "document", source: { type: "base64", media_type: "application/pdf", data: input.bytes.toString("base64") } },

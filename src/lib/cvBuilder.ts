@@ -31,7 +31,7 @@ type CvCountryProfile = {
   label: string; locationLabel: string; paperSize: "A4" | "Letter"; languageHint: string; guidance: string;
   referenceHint: string; showWorkAuthorization: boolean; sources: { title: string; url: string }[];
 };
-const europeanCountries = new Set(["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Greece", "Hungary", "Iceland", "Italy", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Norway", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland"]);
+export const europeanCountries = new Set(["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Greece", "Hungary", "Iceland", "Italy", "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Norway", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland"]);
 export function cvCountryProfile(country: string, kind: CvKind): CvCountryProfile {
   const base: CvCountryProfile = {
     label: `International template — ${country}`, locationLabel: "Current city and country", paperSize: "A4",

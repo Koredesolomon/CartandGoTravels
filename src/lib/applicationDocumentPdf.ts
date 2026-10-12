@@ -30,15 +30,18 @@ export async function createApplicationDocumentPdf({ kind, name, text, fontBytes
   const size = 11, lineHeight = 17;
   const supported = new Set(font.getCharacterSet());
   const printable = (value: string) => Array.from(value, character => supported.has(character.codePointAt(0)!) ? character : `[U+${character.codePointAt(0)!.toString(16).toUpperCase()}]`).join("");
+  // Letters follow business-letter layout, so only other documents carry a title banner.
+  const letter = kind === "Cover Letter", top = letter ? height - 60 : height - 96;
   const addPage = () => {
     const page = document.addPage([width, height]);
+    if (letter) return page;
     page.drawText(title, { x: margin, y: height - 53, font, size: 20, color: ink });
     page.drawLine({ start: { x: margin, y: height - 68 }, end: { x: width - margin, y: height - 68 }, thickness: 0.8, color: rgb(0.8, 0.83, 0.85) });
     return page;
   };
-  let page = addPage(), y = height - 96;
+  let page = addPage(), y = top;
   const drawLine = (line: string) => {
-    if (y < 65) { page = addPage(); y = height - 96; }
+    if (y < 65) { page = addPage(); y = top; }
     if (line) page.drawText(line, { x: margin, y, font, size, color: ink });
     y -= lineHeight;
   };

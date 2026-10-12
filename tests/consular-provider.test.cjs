@@ -8,7 +8,7 @@ const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/lib/consularProvider.ts');
 const compiled = new Module(filename, module);
 compiled._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, filename);
-const { requestConsularProvider, consularProviderFailureReason } = compiled.exports;
+const { requestConsularProvider, consularProviderFailureReason, consularModelRequest } = compiled.exports;
 
 test('a transient provider failure retries the same body once without resetting its deadline', async () => {
   const original = global.fetch;
@@ -59,5 +59,20 @@ test('credit exhaustion has a fixed diagnostic category without exposing the pro
   assert.equal(await consularProviderFailureReason(Response.json({ error: { message: 'Your credit balance is too low to access the service. Synthetic private marker.' } }, { status: 400 })), 'insufficient_credit');
   for (const response of [Response.json({ error: { message: 'Invalid configuration.' } }, { status: 400 }), new Response('<html>Upstream failure</html>', { status: 400 }), Response.json(null, { status: 400 }), Response.json({ error: { message: 42 } }, { status: 400 }), new Response(null, { status: 503 })]) {
     assert.equal(await consularProviderFailureReason(response), 'unavailable');
+  }
+});
+
+test('Sonnet 5.5 requests turn extended thinking off and enable refusal fallback; other models get only the model ID', () => {
+  const original = process.env.ANTHROPIC_MODEL;
+  try {
+    delete process.env.ANTHROPIC_MODEL;
+    assert.deepEqual(consularModelRequest(), {
+      headers: { 'anthropic-beta': 'server-side-fallback-2026-07-01' },
+      body: { model: 'claude-sonnet-5-5', thinking: { type: 'between_tools' }, fallbacks: 'default' },
+    });
+    process.env.ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+    assert.deepEqual(consularModelRequest(), { headers: {}, body: { model: 'claude-sonnet-4-6' } });
+  } finally {
+    if (original === undefined) delete process.env.ANTHROPIC_MODEL; else process.env.ANTHROPIC_MODEL = original;
   }
 });

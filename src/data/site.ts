@@ -20,7 +20,7 @@ export const navGroups = [
     href: "/services?service=study-football-mobility-pathway#study-football-mobility-pathway",
   },
   {
-    label: "AI Consular Check",
+    label: "Consular Check",
     href: "/ai-consular-check",
   },
   {
@@ -287,7 +287,7 @@ export const routePages = {
     cta: "Continue",
   },
   "ai-consular-check": {
-    eyebrow: "AI Consular Check",
+    eyebrow: "Consular Check",
     title: "Meet your virtual consular officer before you apply.",
     description:
       "Run a private document readiness check, practise consular interview questions and learn what to fix before embassy fees or formal submission.",

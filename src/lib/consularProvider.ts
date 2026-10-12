@@ -1,5 +1,22 @@
 const transientStatuses = new Set([500, 502, 503, 504, 529]);
 
+export const DEFAULT_CONSULAR_MODEL = "claude-sonnet-5-5";
+
+// Model-specific request fields shared by the OCR and review routes. Sonnet 4.6
+// ran without thinking when the field was omitted; Sonnet 5.5 thinks by default
+// and that thinking counts toward max_tokens, which these routes size for the
+// JSON output alone. `between_tools` is its lowest setting (no extended
+// thinking) and is rejected by every other model, so it is sent only here.
+// Server-side fallback retries cyber/frontier_llm refusals on Sonnet 5.
+export function consularModelRequest(): { headers: Record<string, string>; body: Record<string, unknown> } {
+  const model = process.env.ANTHROPIC_MODEL || DEFAULT_CONSULAR_MODEL;
+  if (model !== "claude-sonnet-5-5") return { headers: {}, body: { model } };
+  return {
+    headers: { "anthropic-beta": "server-side-fallback-2026-07-01" },
+    body: { model, thinking: { type: "between_tools" }, fallbacks: "default" },
+  };
+}
+
 function retryPause(signal: AbortSignal) {
   signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {

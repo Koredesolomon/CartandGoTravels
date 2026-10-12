@@ -10,7 +10,7 @@ const MAX_BODY_BYTES = MAX_SUPPORT_TOTAL_BYTES + 512 * 1024;
 
 export async function POST(request: NextRequest) {
   const access = getConsularRequestAccess(request);
-  if (!access) return NextResponse.json({ error: "Unlock AI Consular to download your itinerary." }, { status: 402 });
+  if (!access) return NextResponse.json({ error: "Unlock Consular to download your itinerary." }, { status: 402 });
   if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) return NextResponse.json({ error: "This itinerary is too large to export." }, { status: 413 });
   const reader = request.body?.getReader();
   if (!reader) return NextResponse.json({ error: "Provide an itinerary to export." }, { status: 400 });
