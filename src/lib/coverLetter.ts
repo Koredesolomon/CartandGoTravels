@@ -60,7 +60,7 @@ export function coverLetterProfile(country: string, kind: CoverLetterKind): Cove
     "United Kingdom": {
       label: "UK covering letter", ...british, omitPersonalData: true,
       guidance: "Keep it to one page. Say which job you are applying for and where you saw it, show how your skills and experience match the job description with examples, and say why you want to work for the organisation. Use “Yours sincerely” after a named greeting and “Yours faithfully” after “Dear Sir or Madam”.",
-      sources: [{ title: "National Careers Service: cover letters", url: "https://nationalcareers.service.gov.uk/careers-advice/cover-letters" }],
+      sources: [{ title: "National Careers Service: cover letters", url: "https://nationalcareers.service.gov.uk/careers-advice/covering-letter" }],
     },
     Ireland: {
       label: "Irish cover letter", ...british, omitPersonalData: true,
@@ -70,12 +70,12 @@ export function coverLetterProfile(country: string, kind: CoverLetterKind): Cove
     Australia: {
       label: "Australian cover letter", omitPersonalData: true,
       guidance: "Keep it to one page. State the job and where you found it, use the wording of the job advertisement, and only make claims you can back up with examples. Government roles often ask you to address selection criteria separately. Close by thanking the employer.",
-      sources: [{ title: "Australian Government: improve your cover letter", url: "https://whatsnext.jobs.gov.au/improve-your-cover-letter" }],
+      sources: [{ title: "Workforce Australia: write a cover letter", url: "https://www.workforceaustralia.gov.au/individuals/coaching/job-applications/cover-letters" }],
     },
     "New Zealand": {
       label: "New Zealand cover letter", omitPersonalData: true,
       guidance: "Keep it to one page, explain why you want this specific job and how your skills and experience suit it, and finish by saying you look forward to discussing your application.",
-      sources: [{ title: "Careers NZ: how to write a cover letter", url: "https://www.careers.govt.nz/job-hunting/cvs-and-cover-letters/how-to-write-a-cover-letter/" }],
+      sources: [{ title: "Tahatū (NZ Government): how to write a cover letter", url: "https://tahatu.govt.nz/work/applying-for-a-job/how-to-write-a-cover-letter" }],
     },
     Germany: {
       label: "German cover letter / Anschreiben", unknownSalutation: "Dear Sir or Madam,", closingNamed: "Kind regards,", closingUnknown: "Kind regards,",

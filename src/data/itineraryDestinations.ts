@@ -111,7 +111,7 @@ export const itineraryCities: ItineraryCity[] = [
     ["Chatuchak Market", "Chatuchak", 150, ["Food & markets", "Shopping"]],
     ["Yaowarat", "Chinatown", 120, ["Food & markets", "Culture & history"]],
   ]),
-  city("Tanzania", "zanzibar", "Zanzibar", "https://www.zanzibartourism.go.tz/things-to-do", [
+  city("Tanzania", "zanzibar", "Zanzibar", "https://whc.unesco.org/en/list/173/", [
     ["Stone Town", "Stone Town", 180, ["Culture & history"]],
     ["Forodhani Garden", "Stone Town", 90, ["Food & markets", "Relaxation"]],
     ["Jozani Forest Reserve", "Jozani", 180, ["Nature & outdoors"]],
@@ -127,7 +127,7 @@ const extraSources: Record<string, string> = {
   "dubai-5": "https://www.visitdubai.com/explore-dubai/dubai-neighbourhoods/downtown-dubai",
   "london-6": "https://www.visitlondon.com/things-to-do/london-areas/greenwich",
   "london-7": "https://www.visitlondon.com/things-to-do/london-areas/greenwich",
-  "zanzibar-1": "https://site.tanzaniatourism.go.tz/page/zanzibar-island-fam-trip-international-hosted-buyers-only-",
+  "zanzibar-3": "https://www.unesco.org/en/mab/jozani-chwaka-bay",
   "paris-2": "https://www.louvre.fr/en/visit/hours-admission/tickets-and-prices",
   "paris-3": "https://www.musee-orsay.fr/en/visit",
 };
