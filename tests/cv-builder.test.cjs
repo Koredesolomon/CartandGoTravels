@@ -25,7 +25,7 @@ test('core CV fields are validated and an applicant without employment or public
   assert.ok(cvBuilderIssues(emptyCvBuilder()).length > 0);
   const data = fixture();
   const draft = buildCvDraft(data, 'Canada');
-  assert.equal([draft.content.name, ...draft.content.contact, ...draft.content.sections.map(section => `${section.heading}\n${section.body}`)].join('\n\n'), draft.text, 'Template content preserves the complete validated draft');
+  assert.equal([draft.content.name, ...draft.content.contact, `${draft.content.headline.label}: ${draft.content.headline.value}`, ...draft.content.sections.map(section => `${section.heading}\n${section.body}`)].join('\n\n'), draft.text, 'Template content preserves the complete validated draft');
   assert.equal(draft.paperSize, 'Letter');
   for (const value of [data.name, data.email, data.phone, data.location, data.target, data.summary, data.skills, data.education[0].title, data.education[0].organisation]) assert.ok(draft.text.includes(value));
   assert.ok(!draft.text.includes('WORK EXPERIENCE'));

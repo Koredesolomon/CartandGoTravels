@@ -1,4 +1,4 @@
-import type { CvDocumentContent } from "./cvTemplates";
+import type { CvDocumentContent, CvEntry, CvSection } from "./cvTemplates";
 
 export type CvKind = "job" | "academic";
 export type CvHistory = { id: string; title: string; organisation: string; location: string; start: string; end: string; current: boolean; details: string };
@@ -77,7 +77,7 @@ export function cvCountryProfile(country: string, kind: CvKind): CvCountryProfil
     "New Zealand": {
       label: "New Zealand CV", showWorkAuthorization: true,
       guidance: "Cover contact details, relevant skills, dated experience and qualifications. Use referee details when requested by the employer.",
-      sources: [{ title: "Careers NZ: writing a CV", url: "https://knowyourcv.careers.govt.nz/job-hunting/cvs-and-cover-letters/how-to-write-a-cv/" }],
+      sources: [{ title: "Tahatū (NZ Government): how to write a CV", url: "https://tahatu.govt.nz/work/applying-for-a-job/how-to-write-a-cv" }],
     },
   };
   const regional = europeanCountries.has(country) ? {
@@ -135,57 +135,67 @@ function month(value: string) {
 function chronological<T extends CvHistory>(entries: T[]): T[] {
   return [...entries].sort((a, b) => Number(b.current) - Number(a.current) || (a.current && b.current ? b.start.localeCompare(a.start) : b.end.localeCompare(a.end) || b.start.localeCompare(a.start)));
 }
-function historyText(entries: CvHistory[]) {
-  return chronological(entries).map(entry => [
-    `${entry.title.trim()} — ${entry.organisation.trim()}`,
-    [entry.location.trim(), `${month(entry.start)} – ${entry.current ? "Present" : month(entry.end)}`].filter(Boolean).join(" | "),
-    entry.details.trim(),
-  ].filter(Boolean).join("\n")).join("\n\n");
+const dates = (entry: CvHistory) => `${month(entry.start)} – ${entry.current ? "Present" : month(entry.end)}`;
+function historyEntries(entries: CvHistory[]): CvEntry[] {
+  return chronological(entries).map(entry => ({ title: entry.title.trim(), organisation: entry.organisation.trim(), location: entry.location.trim(), dates: dates(entry), notes: [], details: entry.details.trim() }));
 }
+function entriesText(entries: CvEntry[]) {
+  return entries.map(entry => [`${entry.title} — ${entry.organisation}`, [entry.location, entry.dates].filter(Boolean).join(" | "), ...entry.notes, entry.details].filter(Boolean).join("\n")).join("\n\n");
+}
+const historyText = (entries: CvHistory[]) => entriesText(historyEntries(entries));
 export function buildCvDraft(data: CvBuilderData, country: string) {
   const issues = cvBuilderIssues(data);
   if (issues.length) throw new Error(issues.join("\n"));
   const profile = cvCountryProfile(country, data.kind);
-  const education = chronological(data.education).map(entry => [
-    `${entry.title.trim()} — ${entry.organisation.trim()}`,
-    [entry.location.trim(), `${month(entry.start)} – ${entry.current ? `Present${entry.end ? ` (expected completion: ${month(entry.end)})` : ""}` : month(entry.end)}`].filter(Boolean).join(" | "),
+  const educationNotes = (entry: CvEducation) => [
     entry.grade.trim() ? `Grade / classification: ${entry.grade.trim()}` : "",
     data.kind === "academic" && entry.thesis.trim() ? `Thesis / dissertation: ${entry.thesis.trim()}` : "",
     data.kind === "academic" && entry.supervisor.trim() ? `Supervisor: ${entry.supervisor.trim()}` : "",
-    entry.details.trim(),
-  ].filter(Boolean).join("\n")).join("\n\n");
+  ].filter(Boolean);
+  const educationEntries: CvEntry[] = chronological(data.education).map(entry => ({
+    title: entry.title.trim(), organisation: entry.organisation.trim(), location: entry.location.trim(),
+    dates: `${month(entry.start)} – ${entry.current ? `Present${entry.end ? ` (expected completion: ${month(entry.end)})` : ""}` : month(entry.end)}`,
+    notes: educationNotes(entry), details: entry.details.trim(),
+  }));
+  const education = entriesText(educationEntries);
   const sections: string[] = [
     data.name.trim(), [data.email.trim(), data.phone.trim(), data.location.trim()].join(" | "),
     [data.linkedin.trim(), data.website.trim(), ...(data.kind === "academic" ? [data.orcid.trim(), data.scholar.trim()] : [])].filter(Boolean).join("\n"),
     `${data.kind === "academic" ? "Target programme / academic role" : "Target role"}: ${data.target.trim()}`,
   ].filter(Boolean);
-  const content: CvDocumentContent = { name: data.name.trim(), contact: sections.slice(1), sections: [] };
-  const add = (heading: string, text: string) => {
-    if (text.trim()) { sections.push(`${heading}\n${text.trim()}`); content.sections.push({ heading, body: text.trim() }); }
+  const content: CvDocumentContent = {
+    name: data.name.trim(), contact: sections.slice(1, -1),
+    headline: { label: data.kind === "academic" ? "Target programme / academic role" : "Target role", value: data.target.trim() },
+    sections: [],
   };
+  const add = (heading: string, text: string, layout: Omit<CvSection, "heading" | "body"> = {}) => {
+    if (text.trim()) { sections.push(`${heading}\n${text.trim()}`); content.sections.push({ heading, body: text.trim(), ...layout }); }
+  };
+  // Short one-per-line items (skills, languages) are laid out inline to save space.
+  const list = (text: string) => ({ list: text.trim().split("\n").every(line => line.trim().length > 0 && line.trim().length <= 48) });
   if (data.kind === "academic") {
     add("RESEARCH INTERESTS / ACADEMIC PROFILE", data.researchInterests);
-    add("EDUCATION", education);
-    add("RESEARCH EXPERIENCE", historyText(data.research));
-    add("TEACHING AND SUPERVISION", historyText(data.teaching));
+    add("EDUCATION", education, { entries: educationEntries });
+    add("RESEARCH EXPERIENCE", historyText(data.research), { entries: historyEntries(data.research) });
+    add("TEACHING AND SUPERVISION", historyText(data.teaching), { entries: historyEntries(data.teaching) });
     add("PUBLICATIONS", data.publications);
     add("WORKING PAPERS AND WORK IN PROGRESS", data.workingPapers);
     add("CONFERENCE PRESENTATIONS AND POSTERS", data.presentations);
     add("GRANTS AND FUNDING", data.grants);
     add("ACADEMIC SERVICE AND LEADERSHIP", data.service);
     add("PATENTS AND INTELLECTUAL PROPERTY", data.patents);
-    add("RELEVANT PROFESSIONAL EXPERIENCE", historyText(data.employment));
+    add("RELEVANT PROFESSIONAL EXPERIENCE", historyText(data.employment), { entries: historyEntries(data.employment) });
   } else {
     add("PROFESSIONAL SUMMARY", data.summary);
-    add("KEY SKILLS", data.skills);
-    add("WORK EXPERIENCE", historyText(data.employment));
-    add("EDUCATION", education);
+    add("KEY SKILLS", data.skills, list(data.skills));
+    add("WORK EXPERIENCE", historyText(data.employment), { entries: historyEntries(data.employment) });
+    add("EDUCATION", education, { entries: educationEntries });
   }
   add("PROJECTS", data.projects);
   add("CERTIFICATIONS AND LICENCES", data.certifications);
   add("AWARDS AND HONOURS", data.awards);
-  if (data.kind === "academic") add("RESEARCH, TECHNICAL AND LABORATORY SKILLS", data.skills);
-  add("LANGUAGES", data.languages);
+  if (data.kind === "academic") add("RESEARCH, TECHNICAL AND LABORATORY SKILLS", data.skills, list(data.skills));
+  add("LANGUAGES", data.languages, list(data.languages));
   add("PROFESSIONAL DEVELOPMENT", data.training);
   add("VOLUNTEERING AND COMMUNITY ENGAGEMENT", data.volunteering);
   add("PROFESSIONAL MEMBERSHIPS", data.memberships);

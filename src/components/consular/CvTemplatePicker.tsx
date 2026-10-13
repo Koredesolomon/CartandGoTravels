@@ -5,19 +5,28 @@ import { cvTemplates, type CvTemplateId } from "@/lib/cvTemplates";
 
 function Thumbnail({ id }: { id: CvTemplateId }) {
   const style = cvTemplates.find(template => template.id === id)!;
-  const centred = style.alignment === "center";
+  const centred = style.alignment === "center", banner = id === "executive";
+  const x = (width: number) => centred ? 75 - width / 2 : 14;
+  const heading = style.headingMuted ? "#8a9298" : style.accent;
   return <svg aria-hidden="true" viewBox="0 0 150 198" className="mx-auto w-full max-w-40 rounded-sm bg-white shadow-sm">
     <rect width="150" height="198" fill="white" />
-    {id === "executive" ? <rect width="150" height="30" fill={style.accent} /> : null}
+    {banner ? <rect width="150" height="44" fill={style.accent} /> : null}
     {id === "modern" ? <rect x="5" y="12" width="2" height="172" fill={style.accent} /> : null}
-    <text x={centred ? 75 : 14} y="23" textAnchor={centred ? "middle" : "start"} fontSize={id === "modern" ? 11 : 10} fontWeight="700" fill={id === "executive" ? "white" : style.accent}>YOUR NAME</text>
-    <rect x={centred ? 35 : 14} y="36" width="80" height="2" fill="#9aa2a7" />
-    <rect x={centred ? 47 : 14} y="42" width="56" height="2" fill="#bac1c5" />
-    {[56, 87, 119, 152].map((y, section) => <g key={y}>
-      <text x="14" y={y} fontSize="4.5" fontWeight="700" fill={style.accent}>{["PROFILE", "EXPERIENCE", "EDUCATION", "SKILLS"][section]}</text>
-      {style.heading !== "plain" ? <line x1="14" x2={style.heading === "accent" ? 30 : 136} y1={y + 4} y2={y + 4} stroke={style.accent} strokeWidth={style.heading === "accent" ? 1.2 : 0.5} /> : null}
-      {style.heading === "double-rule" ? <line x1="14" x2="136" y1={y + 6} y2={y + 6} stroke={style.accent} strokeWidth="0.3" /> : null}
-      {[11, 16, 21].map((offset, index) => <rect key={offset} x="14" y={y + offset} width={[122, 112, 87][index]} height="2" fill={index === 0 ? "#929ca3" : "#d2d8dc"} />)}
+    <text x={centred ? 75 : 14} y="19" textAnchor={centred ? "middle" : "start"} fontSize={id === "modern" ? 11 : 10} fontWeight="700" fill={banner ? "white" : style.nameInk ? "#1f2328" : style.accent}>YOUR NAME</text>
+    <rect x={x(44)} y="24" width="44" height="2.4" fill={banner ? "#c9d3de" : id === "modern" ? "#5b6870" : style.accent} />
+    <rect x={x(80)} y="31" width="80" height="1.6" fill={banner ? "#9fb0c2" : "#9aa2a7"} />
+    <rect x={x(54)} y="36" width="54" height="1.6" fill={banner ? "#9fb0c2" : "#bac1c5"} />
+    {id === "scholarly" ? <line x1="14" x2="136" y1="42" y2="42" stroke={style.accent} strokeWidth="0.6" /> : null}
+    {[52, 76, 128, 160].map((y, section) => <g key={y}>
+      <text x="14" y={y} fontSize="4.5" fontWeight="700" letterSpacing={style.headingTracking * 0.3} fill={heading}>{["PROFILE", "EXPERIENCE", "EDUCATION", "SKILLS"][section]}</text>
+      {style.heading !== "plain" ? <line x1="14" x2={style.heading === "accent" ? 30 : 136} y1={y + 3} y2={y + 3} stroke={style.accent} strokeWidth={style.heading === "accent" ? 1.2 : 0.5} /> : null}
+      {style.heading === "double-rule" ? <line x1="14" x2="136" y1={y + 5} y2={y + 5} stroke={style.accent} strokeWidth="0.3" /> : null}
+      {section === 1 || section === 2 ? [0, 1].slice(0, section === 1 ? 2 : 1).map(entry => <g key={entry} transform={`translate(0 ${entry * 20})`}>
+        <rect x="14" y={y + 8} width="40" height="2.4" fill="#2c3238" />
+        <rect x="112" y={y + 8} width="24" height="1.8" fill={id === "modern" ? style.accent : "#a8b0b5"} />
+        <rect x="14" y={y + 13} width="34" height="1.8" fill={id === "minimal" ? "#a8b0b5" : style.accent} />
+        <circle cx="16" cy={y + 18.4} r="0.8" fill={style.accent} /><rect x="19" y={y + 17.5} width="100" height="1.8" fill="#d2d8dc" />
+      </g>) : [10, 15].map((offset, index) => <rect key={offset} x="14" y={y + offset} width={[122, 96][index]} height="1.8" fill="#d2d8dc" />)}
     </g>)}
   </svg>;
 }

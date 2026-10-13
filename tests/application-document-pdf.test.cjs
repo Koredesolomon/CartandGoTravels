@@ -115,3 +115,32 @@ test('CV and cover letter PDFs preserve full Unicode drafts, long words and mult
   }
   await assert.rejects(createApplicationDocumentPdf({ kind: 'CV', name: '', text: ' ', fontBytes }), /Build your document/);
 });
+
+test('built CVs keep every entry, headline and list item in each template without printing template labels', async () => {
+  const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
+  const { buildCvDraft, emptyCvBuilder, emptyHistory } = load(path.join(root, 'src/lib/cvBuilder.ts'));
+  const data = Object.assign(emptyCvBuilder(), { name: 'Adaeze Okafor', email: 'adaeze@example.test', phone: '+234 807 000 0000', location: 'Lagos, Nigeria', target: 'Senior Data Analyst', summary: 'Analyst with six years of reporting experience.', skills: 'SQL\nPython\nPower BI', languages: 'English — fluent\nFrench — B1' });
+  Object.assign(data.education[0], { title: 'BSc Statistics', organisation: 'University of Lagos', start: '2014-09', end: '2018-07', grade: 'Second Class Upper' });
+  data.employment = [{ ...emptyHistory('job'), title: 'Senior Data Analyst', organisation: 'PayLink Africa', location: 'Lagos', start: '2022-03', current: true, details: 'Built a credit-risk dashboard used by 40 loan officers.\nAutomated weekly reporting in Python.' }];
+  const short = buildCvDraft(data, 'United Kingdom');
+  const long = buildCvDraft({ ...data, employment: Array.from({ length: 14 }, (_, index) => ({ ...emptyHistory(`job-${index}`), title: `Analyst role ${index}`, organisation: `Employer ${index}`, start: `20${10 + index}-01`, end: `20${10 + index}-12`, details: `Delivered result ${index}.\nImproved process ${index}.` })) }, 'United Kingdom');
+  for (const template of cvTemplates) for (const draft of [short, long]) {
+    const bytes = await createApplicationDocumentPdf({ kind: 'CV', title: draft.title, name: draft.name, text: draft.text, content: draft.content, template: template.id, paperSize: draft.paperSize, fontBytes, boldFontBytes });
+    const task = pdfjs.getDocument({ data: Uint8Array.from(bytes), disableFontFace: true });
+    const pdf = await task.promise;
+    try {
+      const strings = [];
+      for (let number = 1; number <= pdf.numPages; number++) strings.push(...(await (await pdf.getPage(number)).getTextContent()).items.map(item => item.str));
+      const extracted = strings.join('\n');
+      assert.ok(!extracted.includes(template.name === 'Classic' ? '· Classic' : `· ${template.name}`), 'Template name is not printed on the CV');
+      assert.equal(extracted.includes('Page 1 of 1'), false, 'Single-page CVs carry no page count');
+      if (draft === long) assert.ok(pdf.numPages > 1 && extracted.includes(`Page ${pdf.numPages} of ${pdf.numPages}`));
+      const flat = extracted.replace(/\s/g, '');
+      const sections = draft.content.sections;
+      const values = [draft.content.headline.value, ...draft.content.contact, ...sections.map(section => section.heading),
+        ...sections.flatMap(section => (section.entries ?? []).flatMap(entry => [entry.title, entry.organisation, entry.dates, ...entry.notes, ...entry.details.split('\n')])),
+        ...sections.filter(section => section.list).flatMap(section => section.body.split('\n'))];
+      for (const value of values) assert.ok(flat.includes(value.replace(/\s/g, '')), `${template.name}: missing ${value}`);
+    } finally { await task.destroy(); }
+  }
+});
