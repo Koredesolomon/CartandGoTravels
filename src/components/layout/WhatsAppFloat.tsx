@@ -18,7 +18,7 @@ export function WhatsAppFloat() {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+    <div className="fixed bottom-20 right-6 z-50 flex flex-col items-end gap-3">
       <div
         className={`w-56 origin-bottom overflow-hidden rounded-md border border-[#e2dacb] bg-white shadow-[0_24px_60px_-28px_rgba(0,29,47,.7)] transition duration-200 ${
           isOpen
