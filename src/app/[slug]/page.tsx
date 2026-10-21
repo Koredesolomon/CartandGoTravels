@@ -84,14 +84,14 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
     const query = await searchParams;
     const paymentStatus = query?.payment === "success" || query?.payment === "failed" ? query.payment : undefined;
 
-    const configuredAmount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "49.99");
+    const configuredAmount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "34.99");
     const configuredCurrency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
     return (
       <AiConsularCheckPage
         paymentRequired={paymentRequired}
         initialUnlocked={initialUnlocked}
         paymentStatus={paymentStatus}
-        paymentAmount={Number.isFinite(configuredAmount) && configuredAmount > 0 ? configuredAmount : 49.99}
+        paymentAmount={Number.isFinite(configuredAmount) && configuredAmount > 0 ? configuredAmount : 34.99}
         paymentCurrency={/^[A-Z]{3}$/.test(configuredCurrency) ? configuredCurrency : "USD"}
       />
     );

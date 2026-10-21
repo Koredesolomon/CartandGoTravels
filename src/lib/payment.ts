@@ -31,7 +31,7 @@ export function readToken(value: string | undefined, purpose: Token["purpose"]):
 }
 export function paymentConfig() {
   secret();
-  const amount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "49.99");
+  const amount = Number(process.env.FLUTTERWAVE_AMOUNT ?? "34.99");
   const currency = (process.env.FLUTTERWAVE_CURRENCY ?? "USD").toUpperCase();
   const key = process.env.FLUTTERWAVE_SECRET_KEY;
   const missing = [!key && "FLUTTERWAVE_SECRET_KEY"].filter(Boolean);

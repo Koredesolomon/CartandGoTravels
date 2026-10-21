@@ -45,7 +45,7 @@ export function AiConsularCheckPage({
   paymentRequired = false,
   initialUnlocked = false,
   paymentStatus,
-  paymentAmount = 49.99,
+  paymentAmount = 34.99,
   paymentCurrency = "USD",
 }: {
   paymentRequired?: boolean;
