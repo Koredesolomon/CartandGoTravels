@@ -59,7 +59,7 @@ const relocationCards = [
     name: "Tours & Vacations",
     tag: "Tour & Vacation",
     desc: "Curated destination packages that can bundle flights, hotels, excursions and visa support where needed.",
-    href: "/services",
+    href: "/tours",
   },
 ] as const;
 

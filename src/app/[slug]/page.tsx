@@ -5,6 +5,7 @@ import { AiConsularCheckPage } from "@/components/pages/AiConsularCheckPage";
 import { ContactPage } from "@/components/pages/ContactPage";
 import { FlightBookingPage } from "@/components/pages/FlightBookingPage";
 import { CoursesPage } from "@/components/pages/CoursesPage";
+import { PrivacyPolicyPage } from "@/components/pages/PrivacyPolicyPage";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { RouteLandingPage } from "@/components/pages/RouteLandingPage";
@@ -70,6 +71,10 @@ export default async function RoutePage({ params, searchParams }: PageProps) {
 
   if (slug === "contact") {
     return <ContactPage />;
+  }
+
+  if (slug === "privacy") {
+    return <PrivacyPolicyPage />;
   }
 
   if (slug === "ai-consular-check") {

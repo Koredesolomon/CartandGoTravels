@@ -93,7 +93,11 @@ export function SiteFooter() {
       <div className="border-t border-white/10">
         <div className="mx-auto flex max-w-7xl flex-col justify-between gap-2 px-5 py-6 text-xs text-white/60 md:flex-row lg:px-8">
           <p>2026 CartandGo Travels. All rights reserved.</p>
-          <p>Crafted for the modern traveler.</p>
+          <p>
+            <Link href="/privacy" className="hover:text-white">
+              Privacy Policy
+            </Link>
+          </p>
         </div>
       </div>
     </footer>

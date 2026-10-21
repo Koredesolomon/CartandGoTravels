@@ -73,7 +73,7 @@ const slides: readonly ServiceSlide[] = [
     title: "Tours & Vacations",
     text: "Explore group, family and leisure packages that can include flights, hotels, excursions and visa support where needed.",
     image: "/assets/service-tours-vacations.png",
-    href: "/services",
+    href: "/tours",
     icon: "Globe",
   },
   {

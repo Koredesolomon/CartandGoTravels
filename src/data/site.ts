@@ -12,7 +12,7 @@ export const navGroups = [
       ["Travel Insurance", "/services?service=travel-insurance#travel-insurance"],
       ["Previous Refusals", "/services?service=visa-assistance#visa-assistance"],
       ["Flights & Hotels", "/services?service=flights#flights"],
-      ["Tours", "/services"],
+      ["Tours", "/tours"],
     ],
   },
   {
@@ -265,6 +265,16 @@ export const routePages = {
     image: "/assets/hero-travel.jpg",
     bullets: ["Free consultation", "WhatsApp support", "Email response", "Pathway planning"],
     cta: "Book consultation",
+  },
+  privacy: {
+    eyebrow: "Privacy Policy",
+    title: "How we protect your data.",
+    description:
+      "Read what personal data CartandGo Travels collects, how it is used and shared, how long it is kept, and the rights you have over it.",
+    icon: "Shield",
+    image: "/assets/visa-passport.jpg",
+    bullets: ["Applicant Vault", "Never sold", "Your data rights", "Secure retention"],
+    cta: "Contact us",
   },
   auth: {
     eyebrow: "Student Login",
