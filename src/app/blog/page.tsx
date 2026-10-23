@@ -93,25 +93,25 @@ export default function BlogPage() {
             </Link>
 
             <div className="mt-14 border-t border-white/10 pt-7 md:mt-20">
-              <ul className="flex flex-wrap justify-between gap-x-8 gap-y-3 font-mono text-[13px] uppercase tracking-wide text-white/65">
+              <ul className="flex flex-wrap justify-between gap-x-8 gap-y-3 font-mono text-[13px] uppercase tracking-wide text-white/55">
                 <li>
-                  <a href="https://wa.me/2348073231272" className="hover:text-white">
+                  <a href="https://wa.me/2348073231272" className="transition hover:text-white hover:underline hover:underline-offset-4">
                     WhatsApp (NG)
                   </a>
                 </li>
                 <li>
-                  <a href="https://wa.me/13474200238" className="hover:text-white">
+                  <a href="https://wa.me/13474200238" className="transition hover:text-white hover:underline hover:underline-offset-4">
                     WhatsApp (US)
                   </a>
                 </li>
                 <li>
-                  <a href="mailto:visaofficer@cartandgotravels.com" className="hover:text-white">
+                  <a href="mailto:visaofficer@cartandgotravels.com" className="transition hover:text-white hover:underline hover:underline-offset-4">
                     Email
                   </a>
                 </li>
                 <li>
-                  <Link href="/ai-consular-check" className="inline-block py-1 hover:text-white">
-                    Consular Check
+                  <Link href="/ai-consular-check" className="inline-block py-1 transition hover:text-white hover:underline hover:underline-offset-4">
+                    Consular
                   </Link>
                 </li>
               </ul>
