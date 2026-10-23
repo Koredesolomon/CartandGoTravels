@@ -111,7 +111,7 @@ export default function BlogPage() {
                 </li>
                 <li>
                   <Link href="/ai-consular-check" className="inline-block py-1 hover:text-white">
-                    AI Consular+
+                    Consular Check
                   </Link>
                 </li>
               </ul>

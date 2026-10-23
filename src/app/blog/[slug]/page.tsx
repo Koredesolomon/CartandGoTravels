@@ -167,13 +167,13 @@ export default async function BlogPostPage({ params }: PageProps) {
           <section className="my-8 rounded-xl bg-[#042c43] p-6 text-white">
             <h2 className="text-xl font-bold">Check your documents before you pay any fee</h2>
             <p className="mb-4 mt-1 text-white/75">
-              Our AI Consular+ reviews your statement of account, SOP and more the way a real visa officer would.
+              Our Consular Check reviews your statement of account, SOP and more the way a real visa officer would.
             </p>
             <Link
               href="/ai-consular-check"
               className="inline-flex rounded-full bg-[linear-gradient(135deg,#f3b94c,#df8f48)] px-6 py-3 text-sm font-semibold text-[#05131d]"
             >
-              Try AI Consular+
+              Try Consular Check
             </Link>
           </section>
         </article>

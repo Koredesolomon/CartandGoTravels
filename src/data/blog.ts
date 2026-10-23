@@ -191,7 +191,7 @@ export const blogPosts: BlogPost[] = [
         id: "legitimate-lump-sum",
         heading: "If you have a legitimate lump sum",
         paragraphs: [
-          "Keep the paper trail and explain it upfront. Can't save the full amount yet? Our [services](/services) include a Pay Small Small plan to help you build funds over time, and our [AI Consular check](/ai-consular-check) flags weak spots before an officer does.",
+          "Keep the paper trail and explain it upfront. Can't save the full amount yet? Our [services](/services) include a Pay Small Small plan to help you build funds over time, and our [Consular check](/ai-consular-check) flags weak spots before an officer does.",
         ],
       },
     ],
