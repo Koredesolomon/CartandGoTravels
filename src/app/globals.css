@@ -80,3 +80,47 @@ html {
     transform: translateX(-50%);
   }
 }
+
+@keyframes meridianTurn {
+  0% { transform: scaleX(1); }
+  50% { transform: scaleX(0.02); }
+  100% { transform: scaleX(1); }
+}
+
+@keyframes routeFlow {
+  to { stroke-dashoffset: -22; }
+}
+
+@keyframes pinPulse {
+  0% { r: 4; opacity: 0.9; }
+  100% { r: 18; opacity: 0; }
+}
+
+@keyframes planeFly {
+  0% { offset-distance: 0%; opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+.globe-meridian {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: meridianTurn 10s ease-in-out infinite;
+}
+
+.route-dash { animation: routeFlow 1.4s linear infinite; }
+.pin-pulse { animation: pinPulse 2.4s ease-out infinite; }
+
+.plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  offset-rotate: auto;
+  animation: planeFly 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .globe-meridian, .route-dash, .pin-pulse, .plane { animation: none; }
+  .plane { offset-distance: 50%; }
+}

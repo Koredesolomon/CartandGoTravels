@@ -20,6 +20,10 @@ export const navGroups = [
     href: "/services?service=study-football-mobility-pathway#study-football-mobility-pathway",
   },
   {
+    label: "Blog",
+    href: "/blog",
+  },
+  {
     label: "Consular Check",
     href: "/ai-consular-check",
   },

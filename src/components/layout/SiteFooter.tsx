@@ -4,7 +4,7 @@ import Link from "next/link";
 const footerLinks = [
   ["Visa Services", "/services?service=visa-assistance#visa-assistance"],
   ["Flights & Hotels", "/services?service=flights#flights"],
-  ["Blog", null],
+  ["Blog", "/blog"],
   ["About Us", "/about"],
 ] as const;
 
