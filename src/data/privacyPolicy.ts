@@ -417,12 +417,10 @@ export const privacyPolicySections: PolicySection[] = [
       {
         type: "ul",
         items: [
-          "**Privacy Officer / Data Protection Officer:** [[Name]]",
-          "**Email:** visaofficer@cartandgotravels.com",
+          "**Privacy Officer / Data Protection Officer:** Adewole Adewale",
+          "**Email:** support@cartandgotravels.com",
           "**Phone / WhatsApp:** +234 807 323 1272",
-          "**Postal address:** CartandGo Travels, Yaba, Lagos, Nigeria [[full address]]",
-          "**UK representative (if appointed):** [[Name and address]]",
-          "**EU representative (if appointed):** [[Name and address]]",
+          "**Postal address:** CartandGo Travels, 294 Herbert Macauley Way, Yaba, Lagos, Nigeria",
         ],
       },
       { type: "h3", text: "8.2 Changes to this policy" },
