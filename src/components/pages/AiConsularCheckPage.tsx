@@ -562,7 +562,6 @@ export function AiConsularCheckPage({
                       <ScratchInput label="Country of residence (optional)" value={residence} onChange={value => { invalidateAssessment(); setResidence(value); }} />
                     </div>
                     <ScratchInput label="Exact visa route and relevant circumstances (optional)" value={routeDetails} onChange={value => { invalidateAssessment(); setRouteDetails(value); }} />
-                    <p className="text-xs leading-5 text-[#5b6870]">Current official guidance is connected for Canada, the UK and the US. Other destinations receive a limited document review with unverified requirements.</p>
                     <p className="mt-5 text-sm leading-6 text-[#5b6870]">
                       Upload your travel or visa documents, then click Proofread to review them. You can also paste text. A statement of purpose alone cannot establish the strength of a full application.
                     </p>
