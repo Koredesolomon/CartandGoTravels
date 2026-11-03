@@ -52,15 +52,23 @@ export type ReviewDraft = {
   proofreading: { documentId: string; original: string; suggested: string; explanation: string; requiresLegalReview: boolean }[];
   suggestedAdditions: { documentId: string; title: string; proposedText: string; rationale: string; insertionPoint: string; requiresLegalReview: boolean }[];
   verificationIssues: DraftVerificationIssue[];
+  // The AI's own criterion statuses before verification withheld them. Internal only: never sent to the client.
+  unverifiedCriteria?: { key: CriterionKey; status: CriterionStatus }[];
   missingEvidence: string[];
   questions: string[];
   roadmap: string[];
   limitations: string[];
 };
-export type ConsularReport = Omit<ReviewDraft, "verificationIssues"> & {
+export type ConsularReport = Omit<ReviewDraft, "verificationIssues" | "unverifiedCriteria"> & {
   verificationIssues: ReportVerificationIssue[];
   reviewStatus: "complete" | "wording_partial" | "evidence_partial" | "broader_review_required";
   score: number | null;
+  // Indicative percentage when the full score is withheld; null when nothing can be assessed.
+  provisionalScore: number | null;
+  // Share of the scoring weight (0-100) that could be assessed for the provisional score.
+  provisionalCoverage: number;
+  // "unverified" when the evidence checks failed and the AI's own unconfirmed assessment is used.
+  provisionalBasis: "verified" | "unverified";
   statusLabel: string;
   guidance: Omit<Guidance, "sources"> & { sources: Omit<OfficialSource, "text" | "excerpts">[] };
   reviewedAt: string;
@@ -380,11 +388,11 @@ export function validateReview(value: unknown, documents: AssessmentDocument[], 
     return [parsed];
   });
   if (proofreading.length !== proposedCorrections.length) limitations.push("Some proposed wording corrections were withheld because they changed facts or commitments, or attempted to rewrite reading annotations. Review suggestions against the original facts before using them.");
-  return { summary, documents: classified, criteria, findings, proofreading, suggestedAdditions, verificationIssues, missingEvidence, questions, roadmap, limitations };
+  return { summary, documents: classified, criteria, findings, proofreading, suggestedAdditions, verificationIssues, missingEvidence, questions, roadmap, limitations, unverifiedCriteria: rawCriteria.map(entry => ({ key: entry.key, status: entry.status })) };
 }
 
 export function finalizeReview(draft: ReviewDraft, guidance: Guidance, documents: AssessmentDocument[] = []): ConsularReport {
-  const { verificationIssues: internalIssues, ...reviewedDraft } = draft;
+  const { verificationIssues: internalIssues, unverifiedCriteria, ...reviewedDraft } = draft;
   const hasIssues = internalIssues.length > 0;
   const reviewStatus: ConsularReport["reviewStatus"] = internalIssues.some(item => item.impact === "broader_review") ? "broader_review_required"
     : internalIssues.some(item => item.impact === "evidence") ? "evidence_partial" : hasIssues ? "wording_partial" : "complete";
@@ -428,6 +436,18 @@ export function finalizeReview(draft: ReviewDraft, guidance: Guidance, documents
   const assessed = criteria.filter(item => item.status !== "not_applicable");
   const denominator = assessed.reduce((sum, item) => sum + CRITERIA[item.key].weight, 0);
   const score = canScore && denominator ? Math.round(100 * assessed.reduce((sum, item) => sum + CRITERIA[item.key].weight * (item.status === "supported" ? 1 : item.status === "partial" ? 0.5 : 0), 0) / denominator) : null;
+  const weighted = (items: { key: CriterionKey; status: CriterionStatus }[]) => items.reduce((sum, item) => sum + CRITERIA[item.key].weight * (item.status === "supported" ? 1 : item.status === "partial" ? 0.5 : 0), 0);
+  // Provisional: same weights over the criteria that could be assessed. When the evidence
+  // checks failed, every criterion is withheld, so the AI's own unconfirmed statuses are
+  // used instead and the basis is marked "unverified". Never issued for unrelated documents.
+  const provisionalBasis = assessmentEvidenceFailed ? "unverified" as const : "verified" as const;
+  const provisionalSource = assessmentEvidenceFailed ? (unverifiedCriteria ?? draft.criteria) : criteria;
+  const provisionalBase = provisionalSource.filter(item => item.status !== "not_applicable" && item.status !== "not_assessable");
+  const provisionalWeight = provisionalBase.reduce((sum, item) => sum + CRITERIA[item.key].weight, 0);
+  const applicableWeight = provisionalSource.filter(item => item.status !== "not_applicable").reduce((sum, item) => sum + CRITERIA[item.key].weight, 0);
+  const provisionalAllowed = score === null && draft.documents.length > 0 && draft.documents.every(doc => assessmentEvidenceFailed ? doc.relevance !== "unrelated" : doc.relevance === "relevant") && provisionalWeight > 0;
+  const provisionalScore = provisionalAllowed ? Math.round(100 * weighted(provisionalBase) / provisionalWeight) : null;
+  const provisionalCoverage = provisionalAllowed && applicableWeight ? Math.round(100 * provisionalWeight / applicableWeight) : 0;
   const unresolved = draft.missingEvidence.length > 0 || draft.questions.length > 0 || draft.criteria.some(item => ["partial", "missing"].includes(item.status));
   const statusLabel = reviewStatus === "broader_review_required" ? "Partial review — broader human review required"
     : reviewStatus === "evidence_partial" ? "Partial review — evidence needs verification"
@@ -443,5 +463,5 @@ export function finalizeReview(draft: ReviewDraft, guidance: Guidance, documents
   const readingNotes = documents.flatMap(doc => (doc.ocrNotes ?? []).map(note => `${doc.name}: ${note}`));
   limitations.push(...readingNotes.slice(0, 8));
   if (readingNotes.length > 8) limitations.push("Additional document reading notes remain. Ask for clearer copies before relying on unclear handwritten details.");
-  return { ...safeDraft, verificationIssues, reviewStatus, limitations, score, statusLabel, guidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt })) }, reviewedAt: new Date().toISOString(), disclaimer: "This is a document-readiness review, not an approval probability, legal advice or a consular decision. A qualified reviewer should check the complete application before submission." };
+  return { ...safeDraft, verificationIssues, reviewStatus, limitations, score, provisionalScore, provisionalCoverage, provisionalBasis, statusLabel, guidance: { status: guidance.status, sources: guidance.sources.map(source => ({ id: source.id, title: source.title, url: source.url, retrievedAt: source.retrievedAt })) }, reviewedAt: new Date().toISOString(), disclaimer: "This is a document-readiness review, not an approval probability, legal advice or a consular decision. A qualified reviewer should check the complete application before submission." };
 }

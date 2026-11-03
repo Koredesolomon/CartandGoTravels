@@ -17,7 +17,7 @@ export function validateAssessmentFiles(files: File[]) {
   }
 }
 
-export async function readAssessmentFiles(files: File[], signal: AbortSignal): Promise<AssessmentDocument[]> {
+export async function readAssessmentFiles(files: File[], signal: AbortSignal, onScan?: () => void): Promise<AssessmentDocument[]> {
   validateAssessmentFiles(files);
   const documents: AssessmentDocument[] = [];
   let characters = 0;
@@ -30,6 +30,7 @@ export async function readAssessmentFiles(files: File[], signal: AbortSignal): P
       catch (error) {
         if (!(error instanceof ScannedPdfError)) throw error;
         signal.throwIfAborted();
+        onScan?.();
         const { response, data } = await requestConsularResult<OcrResult>("scan", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: file }, signal);
         if (response.status === 401 || response.status === 402) throw new AssessmentAccessError("Payment is required or your session has expired.");
         if (data.code === "review_timeout") throw new AssessmentTimeoutError(data.error ?? "Session timeout, please retry");

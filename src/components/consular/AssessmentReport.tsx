@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { WhatsAppLeadActions } from "@/components/ui/WhatsAppLeadActions";
+import { provisionalNote, readinessBand, scoreWithheldMessage, SCORE_METHOD_NOTE } from "@/lib/consularReadiness";
 import { CRITERIA, LEGAL_CORRECTION_NOTICE, LEGAL_ADDITION_NOTICE, verificationIssueMessage, type ConsularReport, type Evidence, type PolicyEvidence } from "@/lib/consularReview";
 
 const statusLabels = { supported: "Supported by supplied evidence", partial: "Partially supported", missing: "Evidence not supplied", not_applicable: "Not applicable to this route", not_assessable: "Cannot assess yet" };
@@ -11,7 +12,22 @@ function Items({ items }: { items: string[] }) {
   return <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-[#5b6870]">{items.map((item, index) => <li key={index}>{item}</li>)}</ul>;
 }
 
-export function AssessmentReport({ report, country, visaClass, documentNames }: { report: ConsularReport; country: string; visaClass: string; documentNames: Record<string, string> }) {
+function ReadinessScore({ score, provisional = false, unverified = false, note }: { score: number; provisional?: boolean; unverified?: boolean; note: string }) {
+  const percent = Math.max(0, Math.min(100, Math.round(score)));
+  const band = readinessBand(percent);
+  return <>
+    <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-1">
+      <p className="font-serif text-5xl font-black leading-none" style={{ color: band.color }}>{percent}%</p>
+      <p className="pb-1 text-sm text-[#5b6870]"><span className="font-bold" style={{ color: band.color }}>{band.label}</span> · {unverified ? "estimated, unverified " : provisional ? "provisional " : ""}document readiness</p>
+    </div>
+    <div role="meter" aria-label="Document readiness" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-[#e6ecef]">
+      <div className="h-full rounded-full" style={{ width: `${percent}%`, backgroundColor: band.color }} />
+    </div>
+    <p className="mt-3 text-xs leading-5 text-[#5b6870]">{note}</p>
+  </>;
+}
+
+export function AssessmentReport({ report, country, visaClass, documentNames, actions }: { report: ConsularReport; country: string; visaClass: string; documentNames: Record<string, string>; actions?: ReactNode }) {
   function EvidenceQuotes({ evidence, policyEvidence }: { evidence: Evidence[]; policyEvidence: PolicyEvidence[] }) {
     return <>
       {evidence.map((item, index) => <blockquote key={`doc-${index}`} className="mt-3 border-l-2 border-[#0098ba] pl-3 text-sm leading-6 text-[#5b6870]"><p className="font-semibold">{documentNames[item.documentId] ?? item.documentId}</p><p className="whitespace-pre-wrap">“{item.quote}”</p></blockquote>)}
@@ -22,13 +38,16 @@ export function AssessmentReport({ report, country, visaClass, documentNames }: 
     </>;
   }
   return <>
-    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs font-black uppercase text-[#0098ba]">Document pre-assessment report</p><span className="rounded-full bg-[#e8f6fb] px-3 py-1 text-xs font-black text-[#0098ba]">AI review + verification</span></div>
+    <div className="rounded-lg border border-[#d7dfe5] bg-white p-5 shadow-[0_10px_30px_-22px_rgba(0,29,47,.45)]" data-readiness-card>
+      <p className="text-xs font-black uppercase text-[#f0a42f]">Readiness score</p>
+      {report.score !== null ? <ReadinessScore score={report.score} note={SCORE_METHOD_NOTE} /> : report.provisionalScore != null ? <ReadinessScore score={report.provisionalScore} provisional note={provisionalNote(report.provisionalCoverage ?? 0, report.provisionalBasis)} unverified={report.provisionalBasis === "unverified"} /> : <p className="mt-3 font-serif text-4xl font-black leading-none text-[#9aa7ae]">N/A</p>}
+      {report.score !== null || report.provisionalScore == null ? <p className="mt-4 font-bold text-[#07141a]">{report.statusLabel}</p> : null}
+      {report.score === null && report.provisionalScore == null ? <p className="mt-2 text-sm leading-6 text-[#5b6870]">{scoreWithheldMessage(report.reviewStatus)}</p> : null}
+    </div>
+    {actions ? <div className="mt-4">{actions}</div> : null}
+    <div className="mt-6 flex flex-wrap items-center justify-between gap-3"><p className="text-xs font-black uppercase text-[#0098ba]">Document pre-assessment report</p><span className="rounded-full bg-[#e8f6fb] px-3 py-1 text-xs font-black text-[#0098ba]">AI review + verification</span></div>
     <p className="mt-3 text-sm text-[#5b6870]"><b>Target:</b> {country} | <b>Class:</b> {visaClass}</p>
     <p className="mt-4 rounded-md bg-[#f6fbfd] p-4 text-sm leading-6 text-[#5b6870]">{report.summary}</p>
-    <div className="mt-5 rounded-md border border-[#d7dfe5] p-4">
-      <p className="font-bold text-[#07141a]">{report.statusLabel}</p>
-      {report.score !== null ? <><p className="mt-2 text-3xl font-black text-[#07141a]">{report.score}<span className="text-sm font-normal text-[#5b6870]"> / 100 document readiness</span></p><p className="mt-2 text-xs leading-5 text-[#5b6870]">Weighted evidence coverage: purpose 20%, finances 25%, consistency 25%, route-specific intent 20%, writing 10%. Supported = full weight, partial = half, missing = zero; inapplicable criteria are excluded. This measures supplied documents and does not predict visa approval.</p></> : <p className="mt-2 text-sm leading-6 text-[#5b6870]">{report.reviewStatus === "wording_partial" ? "A readiness score awaits completion of the writing review. Other checked evidence assessments remain available." : report.reviewStatus === "broader_review_required" ? "Broader human review is required before relying on the report. No readiness assessment is issued." : report.reviewStatus === "evidence_partial" ? "Overall conclusions and readiness are withheld until the flagged evidence or interpretations are reviewed." : "A readiness score is withheld until the supplied evidence and current guidance allow a meaningful assessment."}</p>}
-    </div>
     <Section title="Documents reviewed">{report.documents.map(doc => <div key={doc.id} className="rounded-md bg-[#f6fbfd] p-3 text-sm leading-6"><p className="font-bold text-[#07141a]">{documentNames[doc.id] ?? doc.id} — {doc.kind}</p><p className="capitalize text-[#0098ba]">{doc.relevance}</p><p className="text-[#5b6870]">{doc.explanation}</p></div>)}</Section>
     <Section title="Evidence assessment">{report.criteria.map(item => <div key={item.key} className="rounded-md border border-[#d7dfe5] p-4"><p className="font-bold text-[#07141a]">{CRITERIA[item.key].label}</p><p className="mt-1 text-xs font-semibold text-[#0098ba]">{statusLabels[item.status]}</p><p className="mt-2 text-sm leading-6 text-[#5b6870]">{item.reason}</p><EvidenceQuotes evidence={item.evidence} policyEvidence={item.policyEvidence} /></div>)}</Section>
     <Section title="Findings">{report.findings.length ? report.findings.map((item, index) => <div key={index} className={`rounded-md border p-4 ${item.type === "risk" ? "border-[#f00000] bg-[#fff0f0]" : item.type === "weak" ? "border-[#f0a42f] bg-[#fff7e8]" : "border-[#0098ba] bg-[#e8f6fb]"}`}><p className="font-bold text-[#07141a]">{item.title}</p><p className="mt-2 text-sm leading-6 text-[#5b6870]">{item.body}</p><EvidenceQuotes evidence={item.evidence} policyEvidence={item.policyEvidence} /></div>) : <p className="text-sm text-[#5b6870]">No specific findings were returned within the reviewed material.</p>}</Section>

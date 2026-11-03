@@ -21,6 +21,9 @@ import { CoverLetterBuilder } from "@/components/consular/CoverLetterBuilder";
 import { coverLetterKinds, emptyCoverLetter, reviewCoverLetter, type CoverLetterData, type CoverLetterDraft, type CoverLetterKind } from "@/lib/coverLetter";
 import { appointmentCentres, interviewSets, type AppointmentType, type InterviewCategory, type InterviewQuestion } from "@/data/interviewQuestions";
 import { analyzeDocument, type Flag } from "@/lib/localRewriteAnalysis";
+import { estimateProofreadSeconds, guessCharacters } from "@/lib/proofreadEstimate";
+import { ReportPdfDownload } from "@/components/consular/ReportPdfDownload";
+import { ProofreadTimer } from "@/components/consular/ProofreadTimer";
 import { EmptyReport, EntryToggle, FlagCard, Panel, ReportSection, Score, ScratchInput, SelectField, inputClass, type EntryMode } from "@/components/consular/ConsularFormControls";
 
 const visaClasses = [
@@ -82,6 +85,7 @@ export function AiConsularCheckPage({
   useEffect(() => () => { uploadVersion.current++; assessmentVersion.current++; assessmentController.current?.abort(); }, []);
   const [assessmentError, setAssessmentError] = useState("");
   const [isAssessing, setIsAssessing] = useState(false);
+  const [proofreadWork, setProofreadWork] = useState({ characters: 0, scans: 0 });
   const [rewriteText, setRewriteText] = useState("");
   const [rewriteResult, setRewriteResult] = useState<{ draft: string; fixes: string[] } | null>(null);
   const [cvMode, setCvMode] = useState<EntryMode>("upload");
@@ -196,10 +200,12 @@ export function AiConsularCheckPage({
     assessmentController.current?.abort();
     const controller = new AbortController();
     assessmentController.current = controller;
+    setProofreadWork({ characters: documentMode === "upload" ? guessCharacters(assessmentFiles.reduce((sum, file) => sum + file.size, 0)) : documentText.trim().length, scans: 0 });
     setIsAssessing(true);
     try {
-      const documents = documentMode === "upload" ? await readAssessmentFiles(assessmentFiles, controller.signal) : [{ id: "document-1", name: "Pasted document", text: documentText.trim() }];
+      const documents = documentMode === "upload" ? await readAssessmentFiles(assessmentFiles, controller.signal, () => setProofreadWork(work => ({ ...work, scans: work.scans + 1 }))) : [{ id: "document-1", name: "Pasted document", text: documentText.trim() }];
       if (version !== assessmentVersion.current || controller.signal.aborted) return;
+      setProofreadWork(work => ({ ...work, characters: documents.reduce((sum, doc) => sum + doc.text.length, 0) }));
       const { response, data } = await requestConsularResult<{ report?: ConsularReport }>("review", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ country, visaClass, nationality, residence, routeDetails, documents }),
@@ -612,7 +618,7 @@ export function AiConsularCheckPage({
                     ) : null}
                   </Panel>
 
-                  <Panel>{analysis ? <AssessmentReport report={analysis} country={country} visaClass={visaClass} documentNames={documentMode === "upload" ? Object.fromEntries(assessmentFiles.map((file, index) => [`document-${index + 1}`, file.name])) : { "document-1": "Pasted document" }} /> : <EmptyReport />}</Panel>
+                  <Panel>{isAssessing ? <ProofreadTimer estimateSeconds={estimateProofreadSeconds(proofreadWork)} /> : analysis ? <>{(() => { const names = documentMode === "upload" ? Object.fromEntries(assessmentFiles.map((file, index) => [`document-${index + 1}`, file.name])) : { "document-1": "Pasted document" }; return <AssessmentReport report={analysis} country={country} visaClass={visaClass} documentNames={names} actions={<ReportPdfDownload report={analysis} country={country} visaClass={visaClass} documentNames={names} />} />; })()}</> : <EmptyReport />}</Panel>
                 </div>
               ) : null}
 

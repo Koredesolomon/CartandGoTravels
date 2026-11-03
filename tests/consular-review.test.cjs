@@ -1724,6 +1724,7 @@ test('section-wide wording concerns require broader review for populated and emp
       assert.equal(report.reviewStatus, 'broader_review_required');
       assert.match(report.statusLabel, /broader human review required/);
       assert.equal(report.score, null);
+      assert.equal(report.provisionalBasis, 'unverified'); assert.equal(typeof report.provisionalScore, 'number'); assert.ok(report.provisionalCoverage > 0);
       assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
       assert.ok(report.verificationIssues.some(item => item.impact === 'broader_review'));
       assert.ok(!JSON.stringify(report).includes('PRIVATE_SECTION_WIDE_DETAIL'));
@@ -1762,9 +1763,81 @@ test('report rendering uses fixed explanations even when an older result contain
     assert.ok(!html.includes('PRIVATE_RENDER_LABEL'));
     assert.ok(!html.includes('person@example.invalid'));
     assert.ok(html.includes(verificationIssueMessage('audit_unverified')));
-    if (report.reviewStatus === 'wording_partial') assert.ok(html.includes('A readiness score awaits completion of the writing review.'));
-    if (report.reviewStatus === 'evidence_partial') assert.ok(html.includes('Overall conclusions and readiness are withheld'));
-    if (report.reviewStatus === 'broader_review_required') assert.ok(html.includes('Broader human review is required before relying on the report.'));
+    // With an estimated percentage the card shows the number; the withheld explanation appears when none can be given.
+    const noNumber = renderToStaticMarkup(createElement(AssessmentReport, { report: { ...legacy, provisionalScore: null }, country: 'United Kingdom', visaClass: 'Visit / Tourist Visa', documentNames: Object.fromEntries(docs.map(doc => [doc.id, doc.name])) }));
+    if (report.reviewStatus === 'wording_partial') assert.ok(noNumber.includes('A readiness score awaits completion of the writing review.'));
+    if (report.reviewStatus === 'evidence_partial') assert.ok(noNumber.includes('Overall conclusions and readiness are withheld'));
+    if (report.reviewStatus === 'broader_review_required') assert.ok(noNumber.includes('Broader human review is required before relying on the report.'));
+    if (legacy.provisionalScore != null && legacy.score === null) assert.ok(!html.includes('Overall conclusions and readiness are withheld until') && !html.includes('Partial review'));
+  }
+});
+
+test('a provisional percentage is offered when the full score is withheld, but never for unrelated documents', () => {
+  const draft = fixture();
+  draft.criteria.forEach(item => { item.status = 'partial'; item.evidence = [{ documentId: 'document-1', quote: 'I plans to visit London' }]; });
+  const full = finalizeReview(validateReview(draft, docs, guidance), guidance);
+  assert.equal(full.score, 50);
+  assert.equal(full.provisionalScore, null);
+
+  const unverifiedGuidance = finalizeReview(validateReview(draft, docs, guidance), { status: 'unavailable', sources: guidance.sources });
+  assert.equal(unverifiedGuidance.score, null);
+  assert.equal(unverifiedGuidance.provisionalScore, 50);
+  assert.equal(unverifiedGuidance.provisionalCoverage, 100);
+
+  const risky = structuredClone(draft); risky.findings[0].type = 'risk';
+  const riskReport = finalizeReview(validateReview(risky, docs, guidance), guidance);
+  assert.equal(riskReport.score, null);
+  assert.equal(riskReport.provisionalScore, 50);
+
+  const unrelated = structuredClone(draft); unrelated.documents[1].relevance = 'unrelated';
+  assert.equal(finalizeReview(validateReview(unrelated, docs, guidance), guidance).provisionalScore, null);
+});
+
+test('the readiness percentage is the first thing in the rendered report, with N/A when nothing can be scored', () => {
+  const { createElement } = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { AssessmentReport } = load('src/components/consular/AssessmentReport.tsx');
+  const names = Object.fromEntries(docs.map(doc => [doc.id, doc.name]));
+  const draft = fixture();
+  draft.criteria.forEach(item => { item.status = 'partial'; item.evidence = [{ documentId: 'document-1', quote: 'I plans to visit London' }]; });
+  const scored = finalizeReview(validateReview(draft, docs, guidance), guidance);
+  const html = renderToStaticMarkup(createElement(AssessmentReport, { report: scored, country: 'United Kingdom', visaClass: 'Visit / Tourist Visa', documentNames: names, actions: createElement('button', null, 'ACTIONS') }));
+  assert.ok(html.indexOf('Readiness score') < html.indexOf('Document pre-assessment report'));
+  assert.ok(html.indexOf('50%') > -1 && html.indexOf('50%') < html.indexOf('Document pre-assessment report'));
+  assert.ok(html.indexOf('ACTIONS') > html.indexOf('50%') && html.indexOf('ACTIONS') < html.indexOf('Document pre-assessment report'));
+  const none = renderToStaticMarkup(createElement(AssessmentReport, { report: { ...scored, score: null, provisionalScore: null }, country: 'United Kingdom', visaClass: 'Visit / Tourist Visa', documentNames: names }));
+  assert.ok(none.includes('N/A'));
+});
+
+test('an estimated percentage survives a broader-review failure that withholds every criterion and questions the documents', () => {
+  const draft = fixture();
+  draft.criteria.forEach(item => { item.status = 'partial'; item.evidence = [{ documentId: 'document-1', quote: 'I plans to visit London' }]; });
+  const parsed = validateReview(draft, docs, guidance, { recoverItems: true, auditIssues: [{ section: 'criteria', index: -1, reason: 'PRIVATE_DETAIL' }, { section: 'documents', index: 0, reason: 'PRIVATE_DETAIL' }] });
+  const report = finalizeReview(parsed, guidance, docs);
+  assert.equal(report.reviewStatus, 'broader_review_required');
+  assert.equal(report.score, null);
+  assert.ok(report.criteria.every(item => item.status === 'not_assessable'));
+  assert.ok(report.documents.some(doc => doc.relevance === 'uncertain'));
+  assert.equal(report.provisionalBasis, 'unverified');
+  assert.equal(report.provisionalScore, 50);
+  assert.ok(!JSON.stringify(report).includes('unverifiedCriteria'));
+  assert.ok(!JSON.stringify(report).includes('PRIVATE_DETAIL'));
+});
+
+test('report PDF is generated in-browser from a finalized report, including withheld items and unsupported characters', async () => {
+  const { createConsularReportPdf } = load('src/lib/consularReportPdf.ts');
+  const parsed = validateReview(fixture(), docs, guidance, { recoverItems: true, auditIssues: [{ section: 'findings', index: 0, reason: 'private' }] });
+  const report = finalizeReview(parsed, guidance, docs);
+  report.summary += ' \u{1F600} emoji and ünïcode';
+  for (const variant of [report, { ...report, score: 82 }, { ...report, score: 41 }]) {
+    const bytes = await createConsularReportPdf({
+      report: variant, country: 'United Kingdom', visaClass: 'Visit / Tourist Visa',
+      documentNames: Object.fromEntries(docs.map(doc => [doc.id, doc.name])),
+      fontBytes: new Uint8Array(fs.readFileSync(path.join(root, 'public/fonts/NotoSans-Regular.ttf'))),
+      boldFontBytes: new Uint8Array(fs.readFileSync(path.join(root, 'public/fonts/NotoSans-Bold.ttf'))),
+    });
+    assert.equal(Buffer.from(bytes.slice(0, 5)).toString(), '%PDF-');
+    assert.ok(bytes.length > 5000);
   }
 });
 
