@@ -86,7 +86,9 @@ test('formal itinerary PDF preserves traveler details, edited activities and Uni
   const text = pages.flat().map(item => item.str).join('\n').replace(/\s+/g, ' ');
   for (const expected of ['FLIGHT & ACCOMMODATION ITINERARY', 'José Adé', 'A12345678', 'Tourist / Leisure', 'Permanent Employment', 'Employment letter', 'bank statements', 'HOTEL123', 'Status: Reserved', 'Status: Confirmed', 'QR 123', 'QR 456', 'Example Hotel', 'Vegetarian meals', 'ABC789', 'Additional note line', 'Day 30', '8 Oct 2026', 'Supporting documents']) assert.ok(text.includes(expected), expected);
   assert.ok(text.replace(/\s/g, '').includes(longWord));
-  assert.ok(!/Cart.?Go|CartandGo/i.test(text));
+  // Branding is limited to the support email; the logo is an image.
+  assert.ok(!/Cart.?Go|CartandGo/i.test(text.split('support@cartandgotravels.com').join('')));
+  for (const items of pages) assert.ok(items.some(item => item.str === 'support@cartandgotravels.com'));
   assert.equal(pages.metadata.info.Author, 'José Adé');
   const attached = [...pages.attachments.values()];
   assert.equal(attached.length, 6);

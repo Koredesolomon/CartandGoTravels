@@ -7,6 +7,8 @@ import type { ItineraryExport } from "@/lib/itineraryExport";
 import type { SupportingDocument } from "@/lib/itineraryDocumentRequirements";
 
 let fontBytes: Promise<Buffer> | undefined;
+let logoBytes: Promise<Buffer> | undefined;
+const SUPPORT_EMAIL = "support@cartandgotravels.com";
 
 export async function createItineraryPdf({ plan, traveler, accommodations }: ItineraryExport, supportingDocuments: SupportingDocument[], generatedAt = new Date()) {
   fontBytes ??= readFile(path.join(process.cwd(), "src/assets/fonts/NotoSans-Regular.ttf"));
@@ -14,6 +16,9 @@ export async function createItineraryPdf({ plan, traveler, accommodations }: Iti
   document.registerFontkit(fontkit);
   const font = await document.embedFont(await fontBytes, { subset: true });
   const bold = await document.embedFont(StandardFonts.HelveticaBold);
+  logoBytes ??= readFile(path.join(process.cwd(), "public/assets/logo.jpg"));
+  const logo = await document.embedJpg(await logoBytes);
+  const logoHeight = 30, logoWidth = logo.width * logoHeight / logo.height;
   document.setTitle(`Flight & Accommodation Itinerary — ${traveler.fullName}`);
   document.setAuthor(traveler.fullName);
   document.setSubject("Flight and accommodation itinerary supplied for a visa application");
@@ -43,14 +48,17 @@ export async function createItineraryPdf({ plan, traveler, accommodations }: Iti
     return output;
   }
   const title = "FLIGHT & ACCOMMODATION ITINERARY";
-  const titleSize = Math.min(19, bodyWidth / bold.widthOfTextAtSize(title, 1));
+  const titleSize = Math.min(19, (bodyWidth - logoWidth - 24) / bold.widthOfTextAtSize(title, 1));
   function addPage() {
     const page = document.addPage([width, height]);
     page.drawText(title, { x: margin, y: height - 55, font: bold, size: titleSize, color: navy });
+    // Brand mark and support contact, top right of every page.
+    page.drawImage(logo, { x: width - margin - logoWidth, y: height - 32 - logoHeight, width: logoWidth, height: logoHeight });
+    page.drawText(SUPPORT_EMAIL, { x: width - margin - font.widthOfTextAtSize(SUPPORT_EMAIL, 8), y: height - 74, font, size: 8, color: muted });
     return page;
   }
-  let page = addPage(), y = height - 82;
-  function newPage() { page = addPage(); y = height - 83; }
+  let page = addPage(), y = height - 94;
+  function newPage() { page = addPage(); y = height - 95; }
   function ensure(space: number) { if (y - space < 65) newPage(); }
   function paragraph(text: string, size = 9, color = muted) {
     for (const line of wrap(text, size, bodyWidth)) {
